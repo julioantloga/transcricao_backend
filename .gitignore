@@ -41,5 +41,5 @@ rascunho.txt
 *.tsbuildinfo
 
 # Local files
-uploads/
-*.local
+uploads/*
+!uploads/.gitkeep
