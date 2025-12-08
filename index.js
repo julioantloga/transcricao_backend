@@ -134,6 +134,8 @@ function getAudioDuration(filePath) {
   }
 }
 
-app.listen(3333, () => {
-  console.log("✅ Backend rodando em http://localhost:3333");
+const PORT = process.env.PORT || 3333;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
