@@ -1,5 +1,5 @@
 # Usar uma imagem oficial do Node em Linux (necessário para ffmpeg)
-FROM node:18
+FROM node:20-alpine
 
 # Instala FFmpeg e FFprobe (necessário para seu execSync)
 RUN apt-get update && apt-get install -y \
@@ -18,11 +18,7 @@ RUN npm install
 # Copia o restante do código
 COPY . .
 
-# Expõe a porta usada pela aplicação (Railway lê isso)
-EXPOSE 3333
-
-# Define a variável PORT usada pelo seu index.js
-ENV PORT=3333
+EXPOSE 8080
 
 # Comando de inicialização do seu backend
 CMD ["npm", "start"]
