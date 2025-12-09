@@ -7,7 +7,7 @@ import os from "os";
 import { execSync } from "child_process";
 import OpenAI from "openai";
 import { gerarReview } from "./services/review.js";
-import { randomUUID } from "crypto"; // no topo
+import { randomUUID } from "crypto";
 
 const processos = new Map();
 
@@ -30,103 +30,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-
-//ROTAS
-
-app.post("/transcribe", upload.single("audio"), async (req, res) => {
-  const inicioTotal = Date.now();
-  const diarizar = req.body?.diarizacao === "true";
-  const filePath = req.file?.path;
-
-  if (!filePath) {
-    return res.status(400).json({ error: "Arquivo não enviado" });
-  }
-
-  try {
-    const ext = path.extname(filePath).toLowerCase();
-    if (![".webm", ".wav"].includes(ext)) {
-      fs.unlinkSync(filePath);
-      return res.status(400).json({ error: "Formato de áudio não suportado." });
-    }
-
-    let wavPath = filePath;
-    let tempoConversao = 0;
-
-    if (ext !== ".wav") {
-      const inicioConversao = Date.now();
-      wavPath = filePath.replace(ext, ".wav");
-      execSync(`ffmpeg -i "${filePath}" -ar 16000 -ac 1 -f wav "${wavPath}" -y`);
-      tempoConversao = (Date.now() - inicioConversao) / 1000;
-    }
-
-    const duracaoAudio = getAudioDuration(wavPath);
-    const wavSizeMB = fs.statSync(wavPath).size / (1024 * 1024);
-    let transcricaoFinal = "";
-
-    const inicioTranscricao = Date.now();
-
-    if (wavSizeMB > 25) {
-      const partesDir = path.join(os.tmpdir(), `partes_${Date.now()}`);
-      fs.mkdirSync(partesDir);
-      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 480 -c copy "${partesDir}/parte_%03d.wav"`);
-
-      const arquivosPartes = fs.readdirSync(partesDir).filter(f => f.endsWith(".wav")).sort();
-      for (const parte of arquivosPartes) {
-        const partePath = path.join(partesDir, parte);
-        const response = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(partePath),
-          model: "whisper-1",
-          response_format: "json",
-          language: "pt"
-        });
-        transcricaoFinal += response.text + "\n";
-      }
-
-      arquivosPartes.forEach(p => fs.unlinkSync(path.join(partesDir, p)));
-      fs.rmdirSync(partesDir);
-    } else {
-      const response = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(wavPath),
-        model: "whisper-1",
-        response_format: "json",
-        language: "pt"
-      });
-      transcricaoFinal = response.text;
-    }
-
-    const tempoTranscricao = (Date.now() - inicioTranscricao) / 1000;
-    const tempoTotal = (Date.now() - inicioTotal) / 1000;
-    const eficiencia = duracaoAudio / tempoTotal;
-
-    if (filePath !== wavPath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
-
-    return res.json({
-      metrics: {
-        audio: duracaoAudio,
-        converter: tempoConversao,
-        transcription: tempoTranscricao,
-        total: tempoTotal,
-        eficacia: eficiencia
-      },
-      text: transcricaoFinal.trim()
-    });
-
-  } catch (err) {
-    console.error("❌ Erro real:", err);
-    return res.status(500).json({ error: "Erro ao processar áudio" });
-  }
-});
-
-app.post("/review", async (req, res) => {
-  try {
-    const review = await gerarReview(req.body);
-    return res.json({ review });
-  } catch (err) {
-    console.error("❌ Erro no review:", err);
-    return res.status(500).json({ error: "Erro ao gerar review" });
-  }
-});
+// ROTAS
 
 app.post("/upload", upload.single("audio"), async (req, res) => {
   const diarizacao = req.body?.diarizacao === "true";
@@ -136,20 +40,26 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     return res.status(400).json({ error: "Arquivo não enviado" });
   }
 
-  const id = randomUUID();
-  processos.set(id, {
-    status: "Recebido",
-    partesTotal: 0,
-    partesConcluidas: 0,
-    pronto: false,
-    transcricao: "",
-    erro: null
-  });
+  try {
+    const id = randomUUID();
+    processos.set(id, {
+      status: "Recebido",
+      partesTotal: 0,
+      partesConcluidas: 0,
+      pronto: false,
+      transcricao: "",
+      erro: null
+    });
 
-  // Transcrição em background
-  processarTranscricao(id, filePath, diarizacao);
+    console.log(`🟡 Iniciando transcrição para ID: ${id}`);
+    processarTranscricao(id, filePath, diarizacao);
 
-  res.json({ id });
+    res.json({ id });
+
+  } catch (err) {
+    console.error("❌ Erro no /upload:", err);
+    res.status(500).json({ error: "Erro interno ao processar o áudio." });
+  }
 });
 
 app.get("/status/:id", (req, res) => {
@@ -170,35 +80,53 @@ app.get("/status/:id", (req, res) => {
   });
 });
 
+app.post("/review", async (req, res) => {
+  try {
+    const review = await gerarReview(req.body);
+    return res.json({ review });
+  } catch (err) {
+    console.error("❌ Erro no review:", err);
+    return res.status(500).json({ error: "Erro ao gerar review" });
+  }
+});
 
-//FUNÇÕES
+// FUNÇÕES
 
 async function processarTranscricao(id, filePath, diarizar) {
   const registro = processos.get(id);
   const inicioTotal = Date.now();
 
   try {
+    console.log(`🔄 Processando ID ${id}, arquivo recebido: ${filePath}`);
+
     const ext = path.extname(filePath).toLowerCase();
     if (![".webm", ".wav"].includes(ext)) {
       fs.unlinkSync(filePath);
       registro.erro = "Formato inválido";
+      console.warn(`⚠️ Formato inválido: ${ext}`);
       return;
     }
 
     let wavPath = filePath;
     if (ext !== ".wav") {
       wavPath = filePath.replace(ext, ".wav");
+      console.log("🎛️ Convertendo para WAV...");
       execSync(`ffmpeg -i "${filePath}" -ar 16000 -ac 1 -f wav "${wavPath}" -y`);
+      console.log(`✅ Conversão concluída: ${wavPath}`);
     }
 
     const duracaoAudio = getAudioDuration(wavPath);
     const wavSizeMB = fs.statSync(wavPath).size / (1024 * 1024);
 
+    console.log(`📏 Duração: ${duracaoAudio.toFixed(2)}s | Tamanho: ${wavSizeMB.toFixed(2)} MB`);
+
     registro.status = "Convertido";
     registro.metrics = { audio: duracaoAudio };
+
     const inicioTranscricao = Date.now();
 
     if (wavSizeMB > 25) {
+      console.log("🔀 Áudio grande, iniciando segmentação...");
       const partesDir = path.join(os.tmpdir(), `partes_${Date.now()}`);
       fs.mkdirSync(partesDir);
       execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 480 -c copy "${partesDir}/parte_%03d.wav"`);
@@ -206,10 +134,14 @@ async function processarTranscricao(id, filePath, diarizar) {
       const partes = fs.readdirSync(partesDir).filter(f => f.endsWith(".wav")).sort();
       registro.partesTotal = partes.length;
 
+      console.log(`📂 Total de partes: ${partes.length}`);
+
       for (let i = 0; i < partes.length; i++) {
         const parte = partes[i];
-        registro.status = `Transcrevendo parte ${i + 1} de ${partes.length}`;
         const partePath = path.join(partesDir, parte);
+
+        registro.status = `Transcrevendo parte ${i + 1} de ${partes.length}`;
+        console.log(`📝 Transcrevendo parte ${i + 1} de ${partes.length}: ${partePath}`);
 
         const response = await openai.audio.transcriptions.create({
           file: fs.createReadStream(partePath),
@@ -223,14 +155,18 @@ async function processarTranscricao(id, filePath, diarizar) {
       }
 
       fs.rmSync(partesDir, { recursive: true });
+      console.log("🗑️ Segmentos removidos após transcrição.");
     } else {
       registro.status = "Transcrevendo";
+      console.log("📝 Transcrevendo áudio completo (sem segmentar)");
+
       const response = await openai.audio.transcriptions.create({
         file: fs.createReadStream(wavPath),
         model: "whisper-1",
         response_format: "json",
         language: "pt"
       });
+
       registro.transcricao = response.text;
       registro.partesTotal = 1;
       registro.partesConcluidas = 1;
@@ -249,6 +185,9 @@ async function processarTranscricao(id, filePath, diarizar) {
     registro.status = "Concluído";
     registro.pronto = true;
 
+    console.log(`✅ Transcrição concluída para ID ${id}`);
+    console.log("📊 Métricas:", registro.metrics);
+
     fs.unlinkSync(filePath);
     if (wavPath !== filePath && fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
   } catch (err) {
@@ -256,7 +195,6 @@ async function processarTranscricao(id, filePath, diarizar) {
     registro.erro = "Erro na transcrição";
   }
 }
-
 
 function getAudioDuration(filePath) {
   try {
@@ -271,7 +209,6 @@ function getAudioDuration(filePath) {
 }
 
 const PORT = process.env.PORT || 8080;
-
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
