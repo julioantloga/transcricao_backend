@@ -1,7 +1,7 @@
-# ✅ Usa Node 20 LTS com suporte a File API (essencial para o openai SDK moderno)
+# ✅ Node 20 LTS com suporte à API File usada pelo SDK OpenAI
 FROM node:20-bullseye
 
-# ✅ Instala FFmpeg via apt
+# ✅ Instala ffmpeg e ffprobe via apt
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -9,20 +9,23 @@ RUN apt-get update && apt-get install -y \
 # Diretório de trabalho
 WORKDIR /app
 
-# Copia package.json e lock
+# Copia apenas os arquivos de dependências primeiro (para cache eficiente)
 COPY package*.json ./
 
-# Instala as dependências
+# Instala dependências
 RUN npm install
 
 # Copia o restante do código
 COPY . .
 
-# Expõe a porta padrão (Railway irá usar process.env.PORT)
+# ✅ Garante que a pasta de uploads existe (evita erro se faltar mkdir)
+RUN mkdir -p uploads
+
+# ✅ Expõe a porta que Railway usará (vem de process.env.PORT)
 EXPOSE 8080
 
-# Força a variável de porta padrão (para fallback)
+# ✅ Define variável de ambiente de fallback (boa prática)
 ENV PORT=8080
 
-# ✅ Define ponto de entrada
+# ✅ Inicia a aplicação
 CMD ["npm", "start"]

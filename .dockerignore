@@ -3,3 +3,4 @@ npm-debug.log
 .env
 Dockerfile
 .dockerignore
+uploads
