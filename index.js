@@ -128,7 +128,7 @@ async function processarTranscricao(id, filePath, diarizar) {
 
     registro.metrics = {
       audio: duracaoAudio,
-      converter: tempoConversao
+      conversion: tempoConversao
     };
 
     const inicioTranscricao = Date.now();
