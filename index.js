@@ -7,13 +7,13 @@ import os from "os";
 import { execSync } from "child_process";
 import OpenAI from "openai";
 import { gerarReview } from "./services/review.js";
+import { randomUUID } from "crypto"; // no topo
+
+const processos = new Map();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -29,6 +29,9 @@ const upload = multer({
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+
+//ROTAS
 
 app.post("/transcribe", upload.single("audio"), async (req, res) => {
   const inicioTotal = Date.now();
@@ -124,6 +127,136 @@ app.post("/review", async (req, res) => {
     return res.status(500).json({ error: "Erro ao gerar review" });
   }
 });
+
+app.post("/upload", upload.single("audio"), async (req, res) => {
+  const diarizacao = req.body?.diarizacao === "true";
+  const filePath = req.file?.path;
+
+  if (!filePath) {
+    return res.status(400).json({ error: "Arquivo não enviado" });
+  }
+
+  const id = randomUUID();
+  processos.set(id, {
+    status: "Recebido",
+    partesTotal: 0,
+    partesConcluidas: 0,
+    pronto: false,
+    transcricao: "",
+    erro: null
+  });
+
+  // Transcrição em background
+  processarTranscricao(id, filePath, diarizacao);
+
+  res.json({ id });
+});
+
+app.get("/status/:id", (req, res) => {
+  const registro = processos.get(req.params.id);
+
+  if (!registro) {
+    return res.status(404).json({ erro: "ID não encontrado" });
+  }
+
+  res.json({
+    status: registro.status,
+    partesTotal: registro.partesTotal,
+    partesConcluidas: registro.partesConcluidas,
+    pronto: registro.pronto,
+    transcricao: registro.pronto ? registro.transcricao : undefined,
+    erro: registro.erro,
+    metrics: registro.metrics || null
+  });
+});
+
+
+//FUNÇÕES
+
+async function processarTranscricao(id, filePath, diarizar) {
+  const registro = processos.get(id);
+  const inicioTotal = Date.now();
+
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    if (![".webm", ".wav"].includes(ext)) {
+      fs.unlinkSync(filePath);
+      registro.erro = "Formato inválido";
+      return;
+    }
+
+    let wavPath = filePath;
+    if (ext !== ".wav") {
+      wavPath = filePath.replace(ext, ".wav");
+      execSync(`ffmpeg -i "${filePath}" -ar 16000 -ac 1 -f wav "${wavPath}" -y`);
+    }
+
+    const duracaoAudio = getAudioDuration(wavPath);
+    const wavSizeMB = fs.statSync(wavPath).size / (1024 * 1024);
+
+    registro.status = "Convertido";
+    registro.metrics = { audio: duracaoAudio };
+    const inicioTranscricao = Date.now();
+
+    if (wavSizeMB > 25) {
+      const partesDir = path.join(os.tmpdir(), `partes_${Date.now()}`);
+      fs.mkdirSync(partesDir);
+      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 480 -c copy "${partesDir}/parte_%03d.wav"`);
+
+      const partes = fs.readdirSync(partesDir).filter(f => f.endsWith(".wav")).sort();
+      registro.partesTotal = partes.length;
+
+      for (let i = 0; i < partes.length; i++) {
+        const parte = partes[i];
+        registro.status = `Transcrevendo parte ${i + 1} de ${partes.length}`;
+        const partePath = path.join(partesDir, parte);
+
+        const response = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(partePath),
+          model: "whisper-1",
+          response_format: "json",
+          language: "pt"
+        });
+
+        registro.transcricao += response.text + "\n";
+        registro.partesConcluidas = i + 1;
+      }
+
+      fs.rmSync(partesDir, { recursive: true });
+    } else {
+      registro.status = "Transcrevendo";
+      const response = await openai.audio.transcriptions.create({
+        file: fs.createReadStream(wavPath),
+        model: "whisper-1",
+        response_format: "json",
+        language: "pt"
+      });
+      registro.transcricao = response.text;
+      registro.partesTotal = 1;
+      registro.partesConcluidas = 1;
+    }
+
+    const tempoTotal = (Date.now() - inicioTotal) / 1000;
+    const tempoTranscricao = (Date.now() - inicioTranscricao) / 1000;
+
+    registro.metrics = {
+      ...registro.metrics,
+      total: tempoTotal,
+      transcription: tempoTranscricao,
+      eficacia: duracaoAudio / tempoTotal
+    };
+
+    registro.status = "Concluído";
+    registro.pronto = true;
+
+    fs.unlinkSync(filePath);
+    if (wavPath !== filePath && fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
+  } catch (err) {
+    console.error("❌ Erro real:", err);
+    registro.erro = "Erro na transcrição";
+  }
+}
+
 
 function getAudioDuration(filePath) {
   try {
