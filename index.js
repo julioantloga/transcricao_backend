@@ -98,6 +98,8 @@ async function processarTranscricao(id, filePath, diarizar) {
 
   try {
     console.log(`🔄 Processando ID ${id}, arquivo recebido: ${filePath}`);
+    
+    const inicioConversao = Date.now();
 
     const ext = path.extname(filePath).toLowerCase();
     if (![".webm", ".wav"].includes(ext)) {
@@ -113,7 +115,7 @@ async function processarTranscricao(id, filePath, diarizar) {
       console.log("🎛️ Convertendo para WAV...");
       execSync(`ffmpeg -i "${filePath}" -ar 16000 -ac 1 -f wav "${wavPath}" -y`);
       console.log(`✅ Conversão concluída: ${wavPath}`);
-    }
+    } 
 
     const duracaoAudio = getAudioDuration(wavPath);
     const wavSizeMB = fs.statSync(wavPath).size / (1024 * 1024);
@@ -121,7 +123,13 @@ async function processarTranscricao(id, filePath, diarizar) {
     console.log(`📏 Duração: ${duracaoAudio.toFixed(2)}s | Tamanho: ${wavSizeMB.toFixed(2)} MB`);
 
     registro.status = "Convertido";
-    registro.metrics = { audio: duracaoAudio };
+
+    const tempoConversao = (Date.now() - inicioConversao) / 1000
+
+    registro.metrics = {
+      audio: duracaoAudio,
+      converter: tempoConversao
+    };
 
     const inicioTranscricao = Date.now();
 
@@ -175,7 +183,7 @@ async function processarTranscricao(id, filePath, diarizar) {
       registro.partesConcluidas = 1;
     }
 
-    const tempoTotal = (Date.now() - inicioTotal) / 1000;
+    const tempoTotal = ((Date.now() - inicioTotal) / 1000) + tempoConversao;
     const tempoTranscricao = (Date.now() - inicioTranscricao) / 1000;
 
     registro.metrics = {
