@@ -125,11 +125,14 @@ async function processarTranscricao(id, filePath, diarizar) {
 
     const inicioTranscricao = Date.now();
 
-    if (wavSizeMB > 25) {
+    if (wavSizeMB > 5) {
       console.log("🔀 Áudio grande, iniciando segmentação...");
+
       const partesDir = path.join(os.tmpdir(), `partes_${Date.now()}`);
       fs.mkdirSync(partesDir);
-      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 480 -c copy "${partesDir}/parte_%03d.wav"`);
+
+      // Divide os audio em partes de 5 minutos
+      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 300 -c copy "${partesDir}/parte_%03d.wav"`);
 
       const partes = fs.readdirSync(partesDir).filter(f => f.endsWith(".wav")).sort();
       registro.partesTotal = partes.length;
