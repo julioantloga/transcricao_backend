@@ -8,8 +8,18 @@ import { execSync } from "child_process";
 import OpenAI from "openai";
 import { gerarReview } from "./services/review.js";
 import { randomUUID } from "crypto";
+import pool from "./db.js";
+import dotenv from "dotenv";
+dotenv.config();
+
+console.log("OPENAI_API_KEY:", process.env.OPENAI_API_KEY?.slice(0, 8) + "...");
+console.log("DATABASE_URL:", process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] || "não definida");
+
 
 const processos = new Map();
+
+// Tempo máximo de cada segmento de áudio em segundos
+const TEMPO_SEGMENTO = 500; // 5 minutos
 
 const app = express();
 app.use(cors());
@@ -83,12 +93,75 @@ app.get("/status/:id", (req, res) => {
 app.post("/review", async (req, res) => {
   try {
     const review = await gerarReview(req.body);
+
+    const {
+      transcript,
+      job_title,
+      job_description,
+      notes,
+      interview_roadmap,
+      job_responsabilities,
+      company_values,
+      metrics,
+      audio_path
+    } = req.body;
+
+    const truncate = (value) => {
+      if (typeof value === "string") return value.slice(0, 20) + "...";
+      if (typeof value === "object") return JSON.stringify(value).slice(0, 20) + "...";
+      return value === null ? null : String(value).slice(0, 20) + "...";
+    };
+
+    console.log("Gravando no banco os dados:", {
+      audio_path: truncate(audio_path),
+      metrics: truncate(metrics),
+      job_title: truncate(job_title),
+      transcript: truncate(transcript),
+      job_description: truncate(job_description),
+      job_responsabilities: truncate(job_responsabilities),
+      interview_roadmap: truncate(interview_roadmap),
+      company_values: truncate(company_values),
+      notes: truncate(notes),
+      review: truncate(review)
+    });
+
+
+    await pool.query(
+      `
+      INSERT INTO public.interview_reviews (
+        audio_path,
+        metrics,
+        job_title,
+        transcript,
+        job_description,
+        job_responsibilities,
+        interview_roadmap,
+        company_values,
+        recruiter_notes,
+        final_review
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `,
+      [
+        audio_path || null,
+        metrics || null,
+        job_title,
+        transcript,
+        job_description,
+        job_responsabilities,
+        interview_roadmap,
+        company_values,
+        notes,
+        review
+      ]
+    );
+
     return res.json({ review });
   } catch (err) {
     console.error("❌ Erro no review:", err);
     return res.status(500).json({ error: "Erro ao gerar review" });
   }
 });
+
 
 // FUNÇÕES
 
@@ -140,7 +213,7 @@ async function processarTranscricao(id, filePath, diarizar) {
       fs.mkdirSync(partesDir);
 
       // Divide os audio em partes de 5 minutos
-      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time 300 -c copy "${partesDir}/parte_%03d.wav"`);
+      execSync(`ffmpeg -i "${wavPath}" -f segment -segment_time ${TEMPO_SEGMENTO} -c copy "${partesDir}/parte_%03d.wav"`);
 
       const partes = fs.readdirSync(partesDir).filter(f => f.endsWith(".wav")).sort();
       registro.partesTotal = partes.length;
