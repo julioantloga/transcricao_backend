@@ -33,33 +33,27 @@ export async function gerarReview({
     }
   
   let CompetenciesInstructions = "";
+  let CompetenciesEntry = "";
   let CompetenciesOutput = "";
 
   if (InterviewTypeSchema !== "none") {
+    CompetenciesEntry = '- Lista das competências que estão sendo avaliadas e suas escalas de avaliação';
+    CompetenciesOutput = '- ANÁLISE DAS COMPETÊNCIAS ESPECIFICADAS'
     CompetenciesInstructions = `
-  AVALIAÇÃO POR COMPETÊNCIA (OBRIGATÓRIO):
-  - Avalie TODAS as competências listadas.
-  - Para cada competência, escolha APENAS UMA das categorias disponíveis:
-    "insuficiente", "abaixo_do_esperado", "dentro_expectativas", "excepcional".
+  6. AVALIAÇÃO POR COMPETÊNCIA (OBRIGATÓRIO):
+  - Avalie TODAS as competências listadas abaixo:
+    ${competencies}
+
+  - Cada competência tem uma descrição e uma instrução para cada categoria
+  - Para cada competência, escolha APENAS UMA das categorias disponíveis:"insuficiente", "abaixo_do_esperado", "dentro_expectativas", "excepcional".
   - A escolha deve ser baseada EXCLUSIVAMENTE em evidências da transcrição.
   - Cite trechos ou comportamentos observáveis sempre que possível.
   - Caso NÃO exista informação suficiente na entrevista para classificar a competência, utilize EXATAMENTE a frase: "Sem informações suficientes para avaliação".
   `;
-
-    CompetenciesOutput = `
-  **Avaliação por Competência:**
-  Para cada competência, informe:
-  - Nome da competência
-  - Categoria atribuída
-  - Justificativa objetiva baseada na entrevista
-  `;
   }
-  
 
   const prompt = `
-Você é um especialista de recrutamento e seleção com o objetivo de gerar pareceres estruturados e assertivos dos candidatos com base nas entrevistas.
-Sua análise deve ser objetiva, evidencial e diretamente conectada aos valores organizacionais.
-Importante: você não pode inventar dados, tudo deve estar no texto da transcrição da entrevista.
+Você é um especialista de recrutamento e seleção com o objetivo de gerar um parecer estruturado e assertivo de um candidato com base na transcrição de sua entrevista.
 
 Você receberá os seguintes dados de entrada para produzir seu parecer:
 - Transcrição da entrevista do candidato: Texto gerado a partir da transcrição da entrevista.
@@ -67,9 +61,15 @@ Você receberá os seguintes dados de entrada para produzir seu parecer:
 - Descrição da vaga: Como a vaga foi divulgada ao candidato.
 - Escopo da função: Atividades que o colaborador deve exercer caso seja contratado.
 - Valores organizacionais: valores e informações relevantes da empresa que podem influenciar na contratação.
+${CompetenciesEntry}
 
 Com base nesses dados, produza um parecer estruturado, objetivo e imparcial sobre o candidato seguinto o template de output especificado abaixo.
-
+- RESUMO BREVE
+- PONTOS FORTES
+- PONTOS DE ATENÇÃO
+- MOTIVAÇÃO
+- INSIGHTS
+${CompetenciesOutput}
 ---
 
 #DADOS DE ENTRADA:
@@ -97,12 +97,11 @@ ${notes || "Não informado"}
 
 **INSTRUÇÕES DO PARECER**:
 IMPORTANTE:
-- Nas instruções abaixo, entenda "ponto" como: competências, comportamentos, habilidades, experiências, comunicação, postura, requisitos e expectativas da vaga e do candidato.
+- Você não pode inventar dados, tudo deve estar no texto da transcrição da entrevista.
+- Nas instruções abaixo, entenda **ponto** como: competências, comportamentos, habilidades, experiências, comunicação, postura, requisitos e expectativas da vaga e do candidato.
 - Considere citar termos técnicos e trechos da entrevista para dar mais credibilidade ao parecer.
-- Em caso de desalinhamento de expectativas salariais, benefícios, modelo de trabalho e ambiente de trabalho, deixe  explicito o que está desalinhado.
+- Em caso de desalinhamento de expectativas salariais, benefícios, modelo de trabalho e ambiente de trabalho, deixe explicito o que está desalinhado.
 - Considere a percepção do avaliador como uma informação importante na análise, essa percepção evidencia comportamentos que a transcrição não consegue interpretar.
-
-${CompetenciesInstructions}
 
 ANALISE:
 1. Destaque até 4 pontos fortes do candidato.
@@ -110,15 +109,17 @@ ANALISE:
 3. Identifique qual a motivação do candidato para assumir a vaga em questão. 
 4. Identifique os pontos de maior e menor aderência do candidato aos valores da organização.
 5. Identifique se teve algo que faltou ser consultado, avaliado ou aprofundado pelo recrutador durante a entrevista, utilize as atividades da vaga e o roteiro da entrevista para encontrar esses gaps.
+${CompetenciesInstructions}
 
-PREFERÊNCIAS
-7. Não utilize títulos nos destaques, por exemplo: Não faça isso "**Ansiedade e pressa**: Sentimentos que podem impactar o desempenho...".
 
 REFINAMENTO DA ANÁISE:
-7. Depois de executar os passos anteriores e criar o output conforme template abaiixo, faça:
-7.1 Uma revisão final para garantir coerência na análise.
-7.2 Filtre informações irrelevantes para o recrutador.
-7.4 Garantir qur o refinamento não seja incluído como um novo tópico no output, ele deve somente revisar o output e ajustá-lo se necessário.
+Depois de executar os passos anteriores e criar o output conforme template abaiixo, faça:
+- Uma revisão final para garantir coerência na análise.
+- Filtre informações irrelevantes para o recrutador.
+
+REGRAS DE OUTPUT
+- Não utilize títulos nos destaques, por exemplo: Não faça isso "**Ansiedade e pressa**: Sentimentos que podem impactar o desempenho...".
+- Não inclua o refinamento da análise como um novo tópico no output, ele deve somente revisar o output e ajustá-lo se necessário.
 
 ---
 #Template do Output
