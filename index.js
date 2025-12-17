@@ -12,6 +12,13 @@ import pool from "./db.js";
 import dotenv from "dotenv";
 dotenv.config();
 
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads";
+
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+
 console.log("OPENAI_API_KEY:", process.env.OPENAI_API_KEY?.slice(0, 8) + "...");
 console.log("DATABASE_URL:", process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] || "não definida");
 
@@ -23,7 +30,7 @@ const TEMPO_SEGMENTO = 500; // 5 minutos
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static("uploads"));
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 // ROTA DE LOGIN (autenticação simples)
 app.post("/login", async (req, res) => {
@@ -54,9 +61,10 @@ app.post("/login", async (req, res) => {
 
 const upload = multer({
   storage: multer.diskStorage({
-    destination: "uploads/",
+    destination: (_, __, cb) => {
+      cb(null, UPLOAD_DIR);
+    },
     filename: (_, file, cb) => {
-      if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
       const ext = path.extname(file.originalname);
       cb(null, `${Date.now()}${ext}`);
     }
