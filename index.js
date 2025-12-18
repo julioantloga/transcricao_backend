@@ -77,6 +77,125 @@ const openai = new OpenAI({
 
 // ROTAS
 
+// LISTAR VAGAS
+app.get("/jobs", async (req, res) => {
+  const { user_id } = req.query;
+  const result = await pool.query(
+    `SELECT * FROM public.jobs WHERE user_id = $1 ORDER BY id DESC`,
+    [user_id]
+  );
+  res.json({ jobs: result.rows });
+});
+
+// BUSCAR VAGA
+app.get("/jobs/:id", async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM public.jobs WHERE id = $1`,
+    [req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: "Vaga não encontrada" });
+  res.json({ job: result.rows[0] });
+});
+
+// CRIAR VAGA
+app.post("/jobs", async (req, res) => {
+  const { user_id, name, job_description, job_responsibilities } = req.body;
+  const result = await pool.query(
+    `INSERT INTO public.jobs (user_id,name,job_description,job_responsibilities)
+     VALUES ($1,$2,$3,$4) RETURNING *`,
+    [user_id, name, job_description, job_responsibilities]
+  );
+  res.json({ job: result.rows[0] });
+});
+
+// ATUALIZAR VAGA
+app.patch("/jobs/:id", async (req, res) => {
+  const { name, job_description, job_responsibilities } = req.body;
+  const result = await pool.query(
+    `UPDATE public.jobs
+     SET name=$1, job_description=$2, job_responsibilities=$3, updated_at=NOW()
+     WHERE id=$4 RETURNING *`,
+    [name, job_description, job_responsibilities, req.params.id]
+  );
+  res.json({ job: result.rows[0] });
+});
+
+// DELETAR VAGA
+app.delete("/jobs/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      `DELETE FROM public.jobs WHERE id = $1`,
+      [id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao deletar vaga:", err);
+    res.status(500).json({ error: "Erro interno ao deletar vaga" });
+  }
+});
+
+// LISTAR ROTEIROS
+app.get("/interview_scripts", async (req, res) => {
+  const { user_id } = req.query;
+  const result = await pool.query(
+    `SELECT * FROM public.interview_scripts WHERE user_id = $1 ORDER BY id DESC`,
+    [user_id]
+  );
+  res.json({ scripts: result.rows });
+});
+
+// BUSCAR ROTEIRO
+app.get("/interview_scripts/:id", async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM public.interview_scripts WHERE id = $1`,
+    [req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: "Roteiro não encontrado" });
+  res.json({ script: result.rows[0] });
+});
+
+// CRIAR ROTEIRO
+app.post("/interview_scripts", async (req, res) => {
+  const { user_id, name, interview_script } = req.body;
+  const result = await pool.query(
+    `INSERT INTO public.interview_scripts (user_id,name,interview_script)
+     VALUES ($1,$2,$3) RETURNING *`,
+    [user_id, name, interview_script]
+  );
+  res.json({ script: result.rows[0] });
+});
+
+// ATUALIZAR ROTEIRO
+app.patch("/interview_scripts/:id", async (req, res) => {
+  const { name, interview_script } = req.body;
+  const result = await pool.query(
+    `UPDATE public.interview_scripts
+     SET name=$1, interview_script=$2, updated_at=NOW()
+     WHERE id=$3 RETURNING *`,
+    [name, interview_script, req.params.id]
+  );
+  res.json({ script: result.rows[0] });
+});
+
+// DELETAR ROTEIRO DE ENTREVISTA
+app.delete("/interview_scripts/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      `DELETE FROM public.interview_scripts WHERE id = $1`,
+      [id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao deletar roteiro:", err);
+    res.status(500).json({ error: "Erro interno ao deletar roteiro" });
+  }
+});
+
+
 app.post("/upload", upload.single("audio"), async (req, res) => {
   const diarizacao = req.body?.diarizacao === "true";
   const interviewId = req.body?.interview_id;
@@ -146,6 +265,8 @@ app.post("/review", async (req, res) => {
       transcript,
       user_id,
       interview_type_id,
+      job_id,
+      interview_script_id,
       job_title,
       job_description,
       notes,
@@ -198,7 +319,9 @@ app.post("/review", async (req, res) => {
            created_at = NOW(),
            user_id = $12,
            interview_type_id = $13,
-           manual_review = $14
+           manual_review = $14,
+          job_id = $15,
+          interview_script_id = $16
          WHERE id = $11`,
         [
           audio_path || null,
@@ -214,7 +337,9 @@ app.post("/review", async (req, res) => {
           id,
           user_id,
           interview_type_id || null,
-          null
+          null,
+          job_id || null,
+          interview_script_id || null
         ]
       );
 
@@ -237,8 +362,10 @@ app.post("/review", async (req, res) => {
           recruiter_notes,
           final_review,
           user_id,
-          interview_type_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          interview_type_id,
+          job_id,
+          interview_script_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           audio_path || null,
           metrics || null,
@@ -251,7 +378,9 @@ app.post("/review", async (req, res) => {
           notes,
           review,
           user_id,
-          interview_type_id
+          interview_type_id,
+          job_id || null,
+          interview_script_id || null
         ]
       );
     }
@@ -509,6 +638,22 @@ app.patch("/competencies/:id", async (req, res) => {
   } catch (err) {
     console.error("Erro ao atualizar competência:", err);
     res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+// DELETAR TIPO DE ENTREVISTA
+app.delete("/interview_types/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      `DELETE FROM public.interview_types WHERE id = $1`,
+      [id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao deletar tipo de entrevista:", err);
+    res.status(500).json({ error: "Erro interno ao deletar tipo" });
   }
 });
 
