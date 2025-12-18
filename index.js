@@ -58,7 +58,6 @@ app.post("/login", async (req, res) => {
   }
 });
 
-
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => {
@@ -93,8 +92,48 @@ app.get("/jobs/:id", async (req, res) => {
     `SELECT * FROM public.jobs WHERE id = $1`,
     [req.params.id]
   );
+
   if (!result.rowCount) return res.status(404).json({ error: "Vaga não encontrada" });
   res.json({ job: result.rows[0] });
+});
+
+// BUSCAR ENTREVISTAS DE UMA VAGA
+app.get("/jobs/:id/interviews", async (req, res) => {
+
+  const { id } = req.params;
+  const { user_id } = req.query;
+
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id é obrigatório" });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        ir.id,
+        ir.job_id,
+        ir.interview_type_id,
+        ir.created_at,
+        j.name AS job_title,
+        it.name AS interview_type_name
+      FROM public.interview_reviews ir
+      LEFT JOIN public.jobs j
+        ON j.id = ir.job_id
+      LEFT JOIN public.interview_types it
+        ON it.id = ir.interview_type_id
+      WHERE ir.job_id = $1
+        AND ir.user_id = $2
+      ORDER BY ir.created_at DESC
+      `,
+      [id, user_id]
+    );
+
+    res.json({ interviews: result.rows });
+  } catch (error) {
+    console.error("Erro ao buscar entrevistas da vaga:", error);
+    res.status(500).json({ error: "Erro ao buscar entrevistas da vaga" });
+  }
 });
 
 // CRIAR VAGA
