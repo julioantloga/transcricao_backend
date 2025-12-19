@@ -6,7 +6,11 @@ import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import OpenAI from "openai";
+
+//SERVICES
 import { gerarReview } from "./services/review.js";
+import { handleJobChat } from "./services/jobChat.js";
+
 import { randomUUID } from "crypto";
 import pool from "./db.js";
 import dotenv from "dotenv";
@@ -17,7 +21,6 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
-
 
 console.log("OPENAI_API_KEY:", process.env.OPENAI_API_KEY?.slice(0, 8) + "...");
 console.log("DATABASE_URL:", process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] || "não definida");
@@ -76,6 +79,28 @@ const openai = new OpenAI({
 
 // ROTAS
 
+app.post("/jobs/:id/chat", async (req, res) => {
+  try {
+    const { question, user_id } = req.body;
+    const { id: jobId } = req.params;
+
+    if (!question) {
+      return res.status(400).json({ error: "Pergunta obrigatória" });
+    }
+
+    const answer = await handleJobChat({
+      jobId,
+      userId: user_id,
+      question
+    });
+
+    res.json({ answer });
+  } catch (err) {
+    console.error("Erro no chat da vaga:", err);
+    res.status(500).json({ error: "Erro ao processar chat da vaga" });
+  }
+});
+
 // LISTAR VAGAS
 app.get("/jobs", async (req, res) => {
   const { user_id } = req.query;
@@ -113,6 +138,7 @@ app.get("/jobs/:id/interviews", async (req, res) => {
       SELECT
         ir.id,
         ir.job_id,
+        ir.candidate_name,
         ir.interview_type_id,
         ir.created_at,
         j.name AS job_title,
@@ -304,6 +330,7 @@ app.post("/review", async (req, res) => {
       transcript,
       user_id,
       interview_type_id,
+      candidate_name,
       job_id,
       interview_script_id,
       job_title,
@@ -331,7 +358,8 @@ app.post("/review", async (req, res) => {
       interview_roadmap,
       job_responsibilities,
       job_title,
-      InterviewTypeSchema
+      InterviewTypeSchema,
+      candidate_name
     });
 
     const truncate = (value) => {
@@ -359,8 +387,9 @@ app.post("/review", async (req, res) => {
            user_id = $12,
            interview_type_id = $13,
            manual_review = $14,
-          job_id = $15,
-          interview_script_id = $16
+           job_id = $15,
+           interview_script_id = $16,
+           candidate_name = $17
          WHERE id = $11`,
         [
           audio_path || null,
@@ -378,7 +407,8 @@ app.post("/review", async (req, res) => {
           interview_type_id || null,
           null,
           job_id || null,
-          interview_script_id || null
+          interview_script_id || null,
+          candidate_name || null
         ]
       );
 
@@ -403,8 +433,9 @@ app.post("/review", async (req, res) => {
           user_id,
           interview_type_id,
           job_id,
-          interview_script_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          interview_script_id,
+          candidate_name
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [
           audio_path || null,
           metrics || null,
@@ -419,7 +450,8 @@ app.post("/review", async (req, res) => {
           user_id,
           interview_type_id,
           job_id || null,
-          interview_script_id || null
+          interview_script_id || null,
+          candidate_name || null
         ]
       );
     }
@@ -441,6 +473,7 @@ app.get("/interviews", async (req, res) => {
       `SELECT
       ir.id,
       ir.job_title,
+      ir.candidate_name,
       ir.created_at,
       it.name AS interview_type_name
     FROM public.interview_reviews ir

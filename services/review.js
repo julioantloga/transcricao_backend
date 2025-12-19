@@ -17,7 +17,8 @@ export async function gerarReview({
   job_responsibilities,
   company_values,
   job_title,
-  InterviewTypeSchema
+  InterviewTypeSchema,
+  candidate_name
   }) {
   
   let competencies = "";
@@ -73,6 +74,9 @@ ${CompetenciesOutput}
 ---
 
 #DADOS DE ENTRADA:
+**Nome do candidato**
+${candidate_name}
+
 **Nome da vaga**
 ${job_title || "Não informado"}
 
