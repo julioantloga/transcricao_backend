@@ -1,147 +1,164 @@
+// backend/services/jobChat.js
 import OpenAI from "openai";
-import { encoding_for_model } from "@dqbd/tiktoken";
 import dotenv from "dotenv";
 import pool from "../db.js";
+import { generateEmbedding, cosineSimilarity } from "./embeddings.js";
+
 dotenv.config();
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/*
-Objetivo:
-- Buscar entrevistas da vaga
-- Resumir transcrições (quando necessário)
-- Montar contexto leve para até 50 entrevistas
-*/
+// SIMPLES: sempre as 4 últimas mensagens (user+assistant)
+const HISTORY_LIMIT = 4;
+const TOP_K = 20;
+
+
+async function getLastMessages({ jobId, userId }) {
+  const result = await pool.query(
+    `
+    SELECT role, content
+    FROM public.job_chat_messages
+    WHERE job_id = $1 AND user_id = $2
+    ORDER BY id DESC
+    LIMIT $3
+    `,
+    [jobId, userId, HISTORY_LIMIT]
+  );
+
+  // veio DESC; devolvemos em ordem cronológica
+  return result.rows.reverse().map(r => ({
+    role: r.role,
+    content: r.content
+  }));
+}
+
+async function saveMessage({ jobId, userId, role, content }) {
+  const text = (content || "").trim();
+  if (!text) return;
+
+  await pool.query(
+    `
+    INSERT INTO public.job_chat_messages (job_id, user_id, role, content)
+    VALUES ($1, $2, $3, $4)
+    `,
+    [jobId, userId, role, text]
+  );
+}
 
 export async function handleJobChat({ jobId, userId, question }) {
-  
-  // 0. Buscar dados da vaga
-    const jobResult = await pool.query(
+  const q = (question || "").trim();
+  if (!q) return "Desculpe, não consigo te ajudar";
+
+  // 1) Histórico curto (4)
+  const history = await getLastMessages({
+    jobId: Number(jobId),
+    userId: Number(userId)
+  });
+
+  // 2) RAG (igual ao atual)
+  const questionEmbedding = await generateEmbedding(q);
+
+  const docsResult = await pool.query(
     `
     SELECT
-        name,
-        job_description,
-        job_responsibilities
-    FROM public.jobs
-    WHERE id = $1 AND user_id = $2
+      cd.candidate_id,
+      cd.category,
+      cd.content,
+      cd.embedding,
+      c.name
+    FROM public.candidate_documents cd
+    INNER JOIN public.candidates c
+      ON c.id = cd.candidate_id
+    WHERE
+      cd.job_id = $1
+      AND c.user_id = $2
     `,
     [jobId, userId]
-    );
+  );
 
-    if (!jobResult.rows.length) {
-    return "Dados da vaga não encontrados ou acesso não autorizado.";
+  // Salva a pergunta mesmo se não houver docs (pra manter histórico coerente)
+  await saveMessage({ jobId, userId, role: "user", content: q });
+
+  if (!docsResult.rows.length) {
+    const fallback = "Não há dados suficientes para responder.";
+    await saveMessage({ jobId, userId, role: "assistant", content: fallback });
+    return fallback;
+  }
+
+  const scoredDocs = docsResult.rows.map(doc => ({
+    ...doc,
+    score: cosineSimilarity(questionEmbedding, doc.embedding)
+  }));
+
+  const topDocs = scoredDocs
+    .sort((a, b) => b.score - a.score)
+    .slice(0, TOP_K);
+
+  const candidateMap = {};
+  for (const doc of topDocs) {
+    if (!candidateMap[doc.candidate_id]) {
+      candidateMap[doc.candidate_id] = { name: doc.name, docs: [] };
     }
+    candidateMap[doc.candidate_id].docs.push({
+      category: doc.category,
+      content: doc.content
+    });
+  }
 
-    const job = jobResult.rows[0];
-  
-    // 1. Buscar entrevistas da vaga
-    const result = await pool.query(
-    `
-    SELECT
-        ir.id,
-        ir.candidate_name,
-        ir.transcript,
-        ir.metrics,
-        COALESCE(ir.manual_review, ir.final_review) AS review,
-        it.name AS interview_type
-    FROM public.interview_reviews ir
-    LEFT JOIN public.interview_types it ON it.id = ir.interview_type_id
-    WHERE ir.job_id = $1
-        AND ir.user_id = $2
-    ORDER BY ir.created_at DESC
-    LIMIT 50
-    `,
-    [jobId, userId]
-    );
-
-    if (!result.rows.length) {
-    return "Não há entrevistas suficientes para análise nesta vaga.";
+  let context = `DADOS DOS CANDIDATOS\n`;
+  for (const c of Object.values(candidateMap)) {
+    context += `\n-------------------------\nCANDIDATO: ${c.name}\n`;
+    for (const d of c.docs) {
+      context += `\n[${d.category?.toUpperCase() || "GERAL"}]\n${d.content}\n`;
     }
+  }
 
-    // 2. Resumir transcrições longas
-    const interviewsContext = [];
+  const systemPrompt = `
+Você é um especialista sênior em recrutamento e seleção.
+Seu papel é apoiar um recrutador humano, respondendo perguntas analíticas sobre os candidatos que participaram do processo seletivo.
 
-    const jobContext = `
-    DADOS DA VAGA
-    Nome da vaga:
-    ${job.name}
+Contexto do seu trabalho:
+- Você está analisando candidatos vinculados a uma vaga específica.
+- O recrutador fará perguntas comparativas, investigativas e de aprofundamento.
+- Suas respostas devem ajudar na tomada de decisão do recrutador.
 
-    Descrição da vaga:
-    ${job.job_description || "Não informada."}
+Regras obrigatórias:
+- Utilize exclusivamente os dados fornecidos no contexto.
+- Não faça suposições nem invente informações.
+- Baseie conclusões apenas em evidências explícitas.
+- Seja técnico, objetivo, claro e direto.
+- Quando não houver dados suficientes, diga explicitamente que não é possível concluir.
+`;
 
-    Atividades da vaga:
-    ${job.job_responsibilities || "Não informadas."}
-    `;
+  // 3) Prompt: system + contexto RAG + histórico + pergunta atual
+  const messages = [
+    { role: "system", content: systemPrompt },
 
-    for (const [index, row] of result.rows.entries()) {
+    // Contexto factual (RAG) separado
+    {
+      role: "system",
+      content: `CONTEXTO (RAG):\n${context}`
+    },
 
-        let transcriptResumo = "Transcrição não disponível.";
-        if (row.transcript && row.transcript.length > 500) {
-            const resumo = await openai.chat.completions.create({
-            model: "gpt-4.1-mini",
-            temperature: 0,
-            messages: [
-                {
-                role: "system",
-                content:
-                    "Resuma a transcrição abaixo focando apenas em comunicação, clareza, comportamento e sinais relevantes para recrutamento."
-                },
-                {
-                role: "user",
-                content: row.transcript.slice(0, 8000)
-                }
-            ]
-            });
+    // Histórico
+    ...history,
 
-            transcriptResumo = resumo.choices[0].message.content;
-            } else if (row.transcript) {
-                transcriptResumo = row.transcript;
-            }
+    // Pergunta atual
+    { role: "user", content: q }
+  ];
 
-        interviewsContext.push(`
-            ENTREVISTA ${index + 1}
-            Candidato: ${row.candidate_name || "Não informado"}
-            Tipo: ${row.interview_type || "não definido"}
-            Métricas: ${JSON.stringify(row.metrics)}
-            Parecer:
-            ${row.review || "Parecer não disponível."}
-            Resumo da transcrição:
-            ${transcriptResumo}
-        `);
-    }
-
-  // 3. Prompt final
   const completion = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
     temperature: 0.2,
-    messages: [
-      {
-        role: "system",
-        content: `
-            Você é um analista sênior de recrutamento e seleção.
-            Use exclusivamente os dados fornecidos.
-            Não invente informações.
-            Para qualquer pergunta que não se refira às entrevistas da vaga responda "Desculpe, não consigo te ajudar com essa pergunta." 
-            Seja técnico, claro e direto.`
-      },
-      {
-        role: "user",
-        content: `
-            ${jobContext}
-
-            ENTREVISTAS ANALISADAS
-            Total: ${interviewsContext.length}
-
-            ${interviewsContext.join("\n")}
-
-            Pergunta do recrutador:
-            ${question}
-            `
-      }
-    ]
+    messages
   });
 
-  return completion.choices[0].message.content;
+  const answer =
+    completion?.choices?.[0]?.message?.content?.trim() ||
+    "Desculpe, não consigo te ajudar";
+
+  await saveMessage({ jobId, userId, role: "assistant", content: answer });
+  return answer;
 }

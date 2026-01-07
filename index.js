@@ -10,6 +10,9 @@ import OpenAI from "openai";
 //SERVICES
 import { gerarReview } from "./services/review.js";
 import { handleJobChat } from "./services/jobChat.js";
+import { generateEmbedding } from "./services/embeddings.js";
+import { upsertCandidateDocument } from "./services/candidateDocuments.js";
+
 
 import { randomUUID } from "crypto";
 import pool from "./db.js";
@@ -34,6 +37,25 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(UPLOAD_DIR));
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_, __, cb) => {
+      cb(null, UPLOAD_DIR);
+    },
+    filename: (_, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, `${Date.now()}${ext}`);
+    }
+  })
+});
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+
+/* ######## ROTAS ######## */
 
 // ROTA DE LOGIN (autenticação simples)
 app.post("/login", async (req, res) => {
@@ -61,45 +83,269 @@ app.post("/login", async (req, res) => {
   }
 });
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_, __, cb) => {
-      cb(null, UPLOAD_DIR);
-    },
-    filename: (_, file, cb) => {
-      const ext = path.extname(file.originalname);
-      cb(null, `${Date.now()}${ext}`);
-    }
-  })
-});
+// LISTAR TODOS OS CANDIDATOS DO USUÁRIO
+app.get("/candidates", async (req, res) => {
+  const { user_id } = req.query;
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id é obrigatório" });
+  }
 
-// ROTAS
-
-app.post("/jobs/:id/chat", async (req, res) => {
   try {
-    const { question, user_id } = req.body;
-    const { id: jobId } = req.params;
+    const result = await pool.query(
+      `
+      SELECT id, name, resume_transcript, resume_summary
+      FROM public.candidates
+      WHERE user_id = $1
+      ORDER BY name ASC
+      `,
+      [user_id]
+    );
 
-    if (!question) {
-      return res.status(400).json({ error: "Pergunta obrigatória" });
+    res.json({ candidates: result.rows });
+  } catch (err) {
+    console.error("Erro ao listar candidatos:", err);
+    res.status(500).json({ error: "Erro ao buscar candidatos" });
+  }
+});
+
+app.post("/candidates", async (req, res) => {
+  const { user_id, name, resume_transcript } = req.body;
+
+  try {
+    // ------------------------------------------------------------------
+    // 1️⃣ Criar candidato
+    // ------------------------------------------------------------------
+    const result = await pool.query(
+      `
+      INSERT INTO public.candidates (user_id, name, resume_transcript)
+      VALUES ($1, $2, $3)
+      RETURNING *
+      `,
+      [user_id, name, resume_transcript]
+    );
+
+    const candidate = result.rows[0];
+
+    // ------------------------------------------------------------------
+    // 2️⃣ Criar ou atualizar documento de currículo (embedding)
+    //     Mesma lógica do backfill
+    // ------------------------------------------------------------------
+    if (resume_transcript && resume_transcript.trim()) {
+      const exists = await pool.query(
+        `
+        SELECT id
+        FROM public.candidate_documents
+        WHERE candidate_id = $1
+          AND category = 'resume'
+          AND source_id IS NULL
+        `,
+        [candidate.id]
+      );
+
+      const embedding = await generateEmbedding(resume_transcript);
+
+      if (exists.rowCount) {
+        // UPDATE
+        await pool.query(
+          `
+          UPDATE public.candidate_documents
+          SET
+            content = $1,
+            embedding = $2,
+            created_at = NOW()
+          WHERE id = $3
+          `,
+          [resume_transcript, embedding, exists.rows[0].id]
+        );
+      } else {
+        // INSERT
+        await pool.query(
+          `
+          INSERT INTO public.candidate_documents (
+            candidate_id,
+            category,
+            source_id,
+            content,
+            embedding
+          )
+          VALUES ($1, 'resume', NULL, $2, $3)
+          `,
+          [candidate.id, resume_transcript, embedding]
+        );
+      }
+    }
+
+    res.json({ candidate });
+  } catch (err) {
+    console.error("Erro ao criar candidato:", err);
+    res.status(500).json({ error: "Erro ao criar candidato" });
+  }
+});
+
+app.patch("/candidates/:id", async (req, res) => {
+  const { name, resume_transcript } = req.body;
+  const candidateId = req.params.id;
+
+  try {
+    // ------------------------------------------------------------------
+    // 1️⃣ Atualizar candidato
+    // ------------------------------------------------------------------
+    const result = await pool.query(
+      `
+      UPDATE public.candidates
+      SET
+        name = $1,
+        resume_transcript = $2,
+        updated_at = NOW()
+      WHERE id = $3
+      RETURNING *
+      `,
+      [name, resume_transcript, candidateId]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ error: "Candidato não encontrado" });
+    }
+
+    const candidate = result.rows[0];
+
+    // ------------------------------------------------------------------
+    // 2️⃣ Criar ou atualizar documento de currículo (embedding)
+    //     Mesma lógica do backfill
+    // ------------------------------------------------------------------
+    if (resume_transcript && resume_transcript.trim()) {
+      const exists = await pool.query(
+        `
+        SELECT id
+        FROM public.candidate_documents
+        WHERE candidate_id = $1
+          AND category = 'resume'
+          AND source_id IS NULL
+        `,
+        [candidateId]
+      );
+
+      const embedding = await generateEmbedding(resume_transcript);
+
+      if (exists.rowCount) {
+        // UPDATE
+        await pool.query(
+          `
+          UPDATE public.candidate_documents
+          SET
+            content = $1,
+            embedding = $2,
+            created_at = NOW()
+          WHERE id = $3
+          `,
+          [resume_transcript, embedding, exists.rows[0].id]
+        );
+      } else {
+        // INSERT
+        await pool.query(
+          `
+          INSERT INTO public.candidate_documents (
+            candidate_id,
+            category,
+            source_id,
+            content,
+            embedding
+          )
+          VALUES ($1, 'resume', NULL, $2, $3)
+          `,
+          [candidateId, resume_transcript, embedding]
+        );
+      }
+    }
+
+    res.json({ candidate });
+  } catch (err) {
+    console.error("Erro ao atualizar candidato:", err);
+    res.status(500).json({ error: "Erro ao atualizar candidato" });
+  }
+});
+
+app.get("/candidates/:id", async (req, res) => {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM public.candidates
+    WHERE id = $1
+    `,
+    [req.params.id]
+  );
+
+  if (!result.rowCount) {
+    return res.status(404).json({ error: "Candidato não encontrado" });
+  }
+
+  res.json({ candidate: result.rows[0] });
+});
+
+app.delete("/candidates/:id", async (req, res) => {
+  await pool.query(
+    `DELETE FROM public.candidates WHERE id = $1`,
+    [req.params.id]
+  );
+
+  res.json({ ok: true });
+});
+
+// LISTAR HISTÓRICO DO CHAT DA VAGA
+app.get("/jobs/:id/chat/messages", async (req, res) => {
+  try {
+    const { id: jobId } = req.params;
+    const { user_id, limit } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id é obrigatório" });
+    }
+
+    const safeLimit = Math.min(Number(limit) || 50, 200);
+
+    const result = await pool.query(
+      `
+      SELECT role, content, created_at
+      FROM public.job_chat_messages
+      WHERE job_id = $1 AND user_id = $2
+      ORDER BY id ASC
+      LIMIT $3
+      `,
+      [Number(jobId), Number(user_id), safeLimit]
+    );
+
+    return res.json({ messages: result.rows });
+  } catch (err) {
+    console.error("Erro ao listar histórico do chat:", err);
+    return res.status(500).json({ error: "Erro ao listar histórico do chat" });
+  }
+});
+
+
+// CHAT DA VAGA (RAG + histórico persistido)
+app.post("/jobs/:id/chat", async (req, res) => {
+  const jobId = Number(req.params.id);
+  const { user_id, question } = req.body;
+
+  try {
+    if (!jobId || !user_id || !question) {
+      return res.status(400).json({ error: "Parâmetros inválidos" });
     }
 
     const answer = await handleJobChat({
       jobId,
-      userId: user_id,
-      question
+      userId: Number(user_id),
+      question: String(question)
     });
 
-    res.json({ answer });
+    return res.json({ answer });
   } catch (err) {
     console.error("Erro no chat da vaga:", err);
-    res.status(500).json({ error: "Erro ao processar chat da vaga" });
+    return res.status(500).json({ error: "Erro interno ao consultar o chat" });
   }
 });
+
 
 // LISTAR VAGAS
 app.get("/jobs", async (req, res) => {
@@ -142,7 +388,8 @@ app.get("/jobs/:id/interviews", async (req, res) => {
         ir.interview_type_id,
         ir.created_at,
         j.name AS job_title,
-        it.name AS interview_type_name
+        it.name AS interview_type_name,
+        it.category AS interview_type_category
       FROM public.interview_reviews ir
       LEFT JOIN public.jobs j
         ON j.id = ir.job_id
@@ -260,7 +507,6 @@ app.delete("/interview_scripts/:id", async (req, res) => {
   }
 });
 
-
 app.post("/upload", upload.single("audio"), async (req, res) => {
   const diarizacao = req.body?.diarizacao === "true";
   const interviewId = req.body?.interview_id;
@@ -324,12 +570,12 @@ app.get("/status/:id", (req, res) => {
 
 app.post("/review", async (req, res) => {
   try {
-
     const {
       id,
       transcript,
       user_id,
       interview_type_id,
+      candidate_id,
       candidate_name,
       job_id,
       interview_script_id,
@@ -343,14 +589,22 @@ app.post("/review", async (req, res) => {
       audio_path
     } = req.body;
 
+    // ------------------------------------------------------------------
+    // 1️⃣ Tipo de entrevista / categoria
+    // ------------------------------------------------------------------
     let InterviewTypeSchema = "";
+    let category = null;
 
     if (interview_type_id && interview_type_id !== "none") {
       InterviewTypeSchema = await getInterviewTypeSchema(interview_type_id);
+      category = InterviewTypeSchema?.category || null;
     } else {
       InterviewTypeSchema = "none";
-      }
-          
+    }
+
+    // ------------------------------------------------------------------
+    // 2️⃣ Gerar parecer
+    // ------------------------------------------------------------------
     const review = await gerarReview({
       transcript,
       job_description,
@@ -362,35 +616,38 @@ app.post("/review", async (req, res) => {
       candidate_name
     });
 
-    const truncate = (value) => {
-      if (typeof value === "string") return value.slice(0, 20) + "...";
-      if (typeof value === "object") return JSON.stringify(value).slice(0, 20) + "...";
-      return value === null ? null : String(value).slice(0, 20) + "...";
-    };
-    
+    // ------------------------------------------------------------------
+    // 3️⃣ Criar ou atualizar interview_reviews
+    // ------------------------------------------------------------------
+    let interviewId = id;
+
     if (id) {
-      // tentativa de atualizar
       const updateResult = await pool.query(
-        `UPDATE public.interview_reviews
-         SET
-           audio_path = $1,
-           metrics = $2,
-           job_title = $3,
-           transcript = $4,
-           job_description = $5,
-           job_responsibilities = $6,
-           interview_roadmap = $7,
-           company_values = $8,
-           recruiter_notes = $9,
-           final_review = $10,
-           created_at = NOW(),
-           user_id = $12,
-           interview_type_id = $13,
-           manual_review = $14,
-           job_id = $15,
-           interview_script_id = $16,
-           candidate_name = $17
-         WHERE id = $11`,
+        `
+        UPDATE public.interview_reviews
+        SET
+          audio_path = $1,
+          metrics = $2,
+          job_title = $3,
+          transcript = $4,
+          job_description = $5,
+          job_responsibilities = $6,
+          interview_roadmap = $7,
+          company_values = $8,
+          recruiter_notes = $9,
+          final_review = $10,
+          created_at = NOW(),
+          user_id = $12,
+          interview_type_id = $13,
+          manual_review = $14,
+          job_id = $15,
+          interview_script_id = $16,
+          candidate_name = $17,
+          candidate_id = $18,
+          category = $19
+        WHERE id = $11
+        RETURNING id
+        `,
         [
           audio_path || null,
           metrics || null,
@@ -408,18 +665,21 @@ app.post("/review", async (req, res) => {
           null,
           job_id || null,
           interview_script_id || null,
-          candidate_name || null
+          candidate_name || null,
+          candidate_id || null,
+          category || null
         ]
       );
 
-      if (updateResult.rowCount === 0) {
-        // id não existe → inserir nova
-        throw new Error("ID não encontrado para update, criando novo");
+      if (!updateResult.rowCount) {
+        throw new Error("ID não encontrado para update");
       }
+
+      interviewId = updateResult.rows[0].id;
     } else {
-      // inserção nova
-      await pool.query(
-        `INSERT INTO public.interview_reviews (
+      const insertResult = await pool.query(
+        `
+        INSERT INTO public.interview_reviews (
           audio_path,
           metrics,
           job_title,
@@ -434,8 +694,13 @@ app.post("/review", async (req, res) => {
           interview_type_id,
           job_id,
           interview_script_id,
-          candidate_name
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          candidate_id,
+          candidate_name,
+          category
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        RETURNING id
+        `,
         [
           audio_path || null,
           metrics || null,
@@ -451,10 +716,25 @@ app.post("/review", async (req, res) => {
           interview_type_id,
           job_id || null,
           interview_script_id || null,
-          candidate_name || null
+          candidate_name || null,
+          candidate_id || null,
+          category
         ]
       );
+
+      interviewId = insertResult.rows[0].id;
     }
+
+    // ------------------------------------------------------------------
+    // 4️⃣ Criar / atualizar documento embedado da entrevista
+    // ------------------------------------------------------------------
+    await upsertCandidateDocument({
+      candidate_id,
+      job_id,
+      category,
+      source_id: interviewId,
+      content: review
+    });
 
     return res.json({ review });
   } catch (err) {
@@ -475,7 +755,8 @@ app.get("/interviews", async (req, res) => {
       ir.job_title,
       ir.candidate_name,
       ir.created_at,
-      it.name AS interview_type_name
+      it.name AS interview_type_name,
+      it.category AS interview_type_category
     FROM public.interview_reviews ir
     LEFT JOIN public.interview_types it
       ON it.id = ir.interview_type_id
@@ -513,16 +794,43 @@ app.patch("/interviews/:id/manual_review", async (req, res) => {
   const { manual_review } = req.body;
 
   try {
+    // --------------------------------------------------
+    // 1️⃣ Atualizar parecer manual da entrevista
+    // --------------------------------------------------
     const result = await pool.query(
-      `UPDATE public.interview_reviews
-       SET manual_review = $1
-       WHERE id = $2`,
+      `
+      UPDATE public.interview_reviews
+      SET
+        manual_review = $1,
+        final_review = $1,
+        created_at = NOW()
+      WHERE id = $2
+      RETURNING
+        id,
+        candidate_id,
+        job_id,
+        category
+      `,
       [manual_review, id]
     );
 
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Entrevista não encontrada" });
     }
+
+    const interview = result.rows[0];
+
+    // --------------------------------------------------
+    // 2️⃣ Atualizar documento embedado da entrevista
+    //     (mesma função reutilizável)
+    // --------------------------------------------------
+    await upsertCandidateDocument({
+      candidate_id: interview.candidate_id,
+      job_id: interview.job_id,
+      category: interview.category,
+      source_id: interview.id,
+      content: manual_review
+    });
 
     return res.json({ ok: true });
   } catch (err) {
@@ -559,15 +867,17 @@ app.patch("/interviews/:id/review_feedback", async (req, res) => {
 });
 
 app.post("/interview_types", async (req, res) => {
-  const { user_id, name } = req.body;
+  const { user_id, name, category } = req.body;
+  const safeCategory = category || "cultura";
+
   if (!user_id || !name) {
     return res.status(400).json({ error: "Campos obrigatórios: user_id, name" });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO public.interview_types (user_id, name) VALUES ($1, $2) RETURNING *`,
-      [user_id, name]
+      `INSERT INTO public.interview_types (user_id, name, category) VALUES ($1, $2, $3) RETURNING *`,
+      [user_id, name, safeCategory]
     );
     res.json({ type: result.rows[0] });
   } catch (err) {
@@ -575,7 +885,6 @@ app.post("/interview_types", async (req, res) => {
     res.status(500).json({ error: "Erro interno" });
   }
 });
-
 
 app.get("/interview_types", async (req, res) => {
   const userId = req.query.user_id;
@@ -622,12 +931,12 @@ app.get("/interview_types/:id", async (req, res) => {
 
 app.patch("/interview_types/:id", async (req, res) => {
   const { id } = req.params;
-  const { name } = req.body;
+  const { name, category } = req.body;
 
   try {
     const result = await pool.query(
-      `UPDATE public.interview_types SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [name, id]
+      `UPDATE public.interview_types SET name = $1, category = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
+      [name, category, id]
     );
 
     if (result.rowCount === 0)
@@ -729,6 +1038,7 @@ app.delete("/interview_types/:id", async (req, res) => {
   }
 });
 
+// DELETAR COMPETÊNCIAS
 app.delete("/competencies/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -794,8 +1104,6 @@ app.get("/interview_types/:id/schema", async (req, res) => {
     res.status(500).json({ error: "Erro interno ao gerar schema" });
   }
 });
-
-
 
 // FUNÇÕES
 async function processarTranscricao(id, filePath, diarizar) {
@@ -959,7 +1267,7 @@ function getAudioDuration(filePath) {
 async function getInterviewTypeSchema(interviewTypeId) {
   // Busca o tipo de entrevista
   const typeRes = await pool.query(
-    `SELECT name FROM public.interview_types WHERE id = $1`,
+    `SELECT name, category FROM public.interview_types WHERE id = $1`,
     [interviewTypeId]
   );
 
@@ -984,10 +1292,10 @@ async function getInterviewTypeSchema(interviewTypeId) {
 
   return {
     name: typeRes.rows[0].name,
+    category: typeRes.rows[0].category,
     competences: compRes.rows
   };
 }
-
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
