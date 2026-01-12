@@ -1,4 +1,8 @@
-/* backfillCandidateDocuments.js */
+/* =============================================================================
+   FILE: backfillCandidateDocuments.js
+   RESPONSABILIDADE: Backfill de documentos (currículos e entrevistas)
+   ============================================================================= */
+
 import { generateEmbedding } from "../services/embeddings.js";
 import dotenv from "dotenv";
 import pool from "../db.js";
@@ -8,9 +12,9 @@ dotenv.config();
 async function backfill() {
   console.log("🚀 Iniciando backfill de candidate_documents");
 
-  /* ===========================================================================
-  1️⃣ CURRÍCULOS
-  =========================================================================== */
+  /* ========================================================================
+     1️⃣ CURRÍCULOS
+     ======================================================================== */
   const candidates = await pool.query(`
     SELECT id, resume_transcript
     FROM public.candidates
@@ -51,9 +55,9 @@ async function backfill() {
     );
   }
 
-  /* ===========================================================================
-  2️⃣ ENTREVISTAS
-  =========================================================================== */
+  /* ========================================================================
+     2️⃣ ENTREVISTAS
+     ======================================================================== */
   const interviews = await pool.query(`
     SELECT
       id,
@@ -115,24 +119,14 @@ backfill().catch(err => {
 });
 
 
+/* =============================================================================
+   FILE: candidateDocuments.js
+   RESPONSABILIDADE: Upsert idempotente de documentos embedados
+   ============================================================================= */
 
-/*candidateDocuments.js*/
 import pool from "../db.js";
 import { generateEmbedding } from "./embeddings.js";
 
-/**
- * Cria ou atualiza um documento embedado do candidato.
- * Estratégia idempotente:
- * - Se existir (via source_id) → UPDATE
- * - Senão → INSERT
- *
- * @param {Object} params
- * @param {number} params.candidate_id
- * @param {number|null} params.job_id
- * @param {string|null} params.category
- * @param {string|null} params.source_id  // id lógico da origem (ex: interview_reviews.id)
- * @param {string} params.content         // texto a ser embedado
- */
 export async function upsertCandidateDocument({
   candidate_id,
   job_id = null,
@@ -146,10 +140,6 @@ export async function upsertCandidateDocument({
 
   const embedding = await generateEmbedding(content);
 
-  // ------------------------------------------------------------------
-  // Verifica se o documento já existe (chave lógica = source_id)
-  // Para currículo: source_id = NULL + category = 'resume'
-  // ------------------------------------------------------------------
   let exists;
 
   if (source_id) {
@@ -175,7 +165,6 @@ export async function upsertCandidateDocument({
   }
 
   if (exists.rowCount) {
-    // UPDATE
     await pool.query(
       `
       UPDATE public.candidate_documents
@@ -198,7 +187,6 @@ export async function upsertCandidateDocument({
       ]
     );
   } else {
-    // INSERT
     await pool.query(
       `
       INSERT INTO public.candidate_documents (
@@ -224,7 +212,11 @@ export async function upsertCandidateDocument({
 }
 
 
-/*embeddings.js*/
+/* =============================================================================
+   FILE: embeddings.js
+   RESPONSABILIDADE: Geração de embeddings e similaridade vetorial
+   ============================================================================= */
+
 import OpenAI from "openai";
 import dotenv from "dotenv";
 dotenv.config();
@@ -242,7 +234,6 @@ export async function generateEmbedding(text) {
   return response.data[0].embedding;
 }
 
-/* Similaridade de cosseno */
 export function cosineSimilarity(a, b) {
   let dot = 0.0;
   let normA = 0.0;
@@ -257,14 +248,16 @@ export function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-/* jobChat.js */
+
+/* =============================================================================
+   FILE: jobChat.js
+   RESPONSABILIDADE: Chat RAG sobre candidatos por vaga
+   ============================================================================= */
+
 import OpenAI from "openai";
-import pool from "../db.js";
 import dotenv from "dotenv";
-import {
-  generateEmbedding,
-  cosineSimilarity
-} from "./embeddings.js";
+import pool from "../db.js";
+import { generateEmbedding, cosineSimilarity } from "./embeddings.js";
 
 dotenv.config();
 
@@ -272,12 +265,51 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+const HISTORY_LIMIT = 4;
+const TOP_K = 20;
+
+async function getLastMessages({ jobId, userId }) {
+  const result = await pool.query(
+    `
+    SELECT role, content
+    FROM public.job_chat_messages
+    WHERE job_id = $1 AND user_id = $2
+    ORDER BY id DESC
+    LIMIT $3
+    `,
+    [jobId, userId, HISTORY_LIMIT]
+  );
+
+  return result.rows.reverse().map(r => ({
+    role: r.role,
+    content: r.content
+  }));
+}
+
+async function saveMessage({ jobId, userId, role, content }) {
+  const text = (content || "").trim();
+  if (!text) return;
+
+  await pool.query(
+    `
+    INSERT INTO public.job_chat_messages (job_id, user_id, role, content)
+    VALUES ($1, $2, $3, $4)
+    `,
+    [jobId, userId, role, text]
+  );
+}
+
 export async function handleJobChat({ jobId, userId, question }) {
+  const q = (question || "").trim();
+  if (!q) return "Desculpe, não consigo te ajudar";
 
-  /* Embedding da pergunta */
-  const questionEmbedding = await generateEmbedding(question);
+  const history = await getLastMessages({
+    jobId: Number(jobId),
+    userId: Number(userId)
+  });
 
-  /* Buscar documentos da vaga */
+  const questionEmbedding = await generateEmbedding(q);
+
   const docsResult = await pool.query(
     `
     SELECT
@@ -296,93 +328,58 @@ export async function handleJobChat({ jobId, userId, question }) {
     [jobId, userId]
   );
 
+  await saveMessage({ jobId, userId, role: "user", content: q });
+
   if (!docsResult.rows.length) {
-    return "Não há dados suficientes para responder.";
+    const fallback = "Não há dados suficientes para responder.";
+    await saveMessage({ jobId, userId, role: "assistant", content: fallback });
+    return fallback;
   }
 
-  /* Calcular similaridade */
   const scoredDocs = docsResult.rows.map(doc => ({
     ...doc,
     score: cosineSimilarity(questionEmbedding, doc.embedding)
   }));
 
-  /* Top K documentos */
-  const TOP_K = 20;
-
   const topDocs = scoredDocs
     .sort((a, b) => b.score - a.score)
     .slice(0, TOP_K);
 
-  /* Agrupar por candidato */
-  const candidateMap = {};
+  let context = `DADOS DOS CANDIDATOS\n`;
 
   for (const doc of topDocs) {
-    if (!candidateMap[doc.candidate_id]) {
-      candidateMap[doc.candidate_id] = {
-        name: doc.name,
-        docs: []
-      };
-    }
-
-    candidateMap[doc.candidate_id].docs.push({
-      category: doc.category,
-      content: doc.content
-    });
+    context += `\n[CANDIDATO: ${doc.name}] [${doc.category}]\n${doc.content}\n`;
   }
 
-  /* Montar contexto enxuto */
-  let context = `ANÁLISE DE CANDIDATOS\n`;
-  let systemPrompt = `Você é um analista sênior de recrutamento e seleção.
-            Use exclusivamente os dados fornecidos.
-            Não invente informações.
-            Se não souber o que responder resonda: "Desculpe, não consigo te ajudar"
-            Seja técnico, claro e direto.`;
-
-  for (const c of Object.values(candidateMap)) {
-    context += `
--------------------------
-CANDIDATO: ${c.name}
-`;
-
-    for (const d of c.docs) {
-      context += `
-[${d.category?.toUpperCase() || "GERAL"}]
-${d.content}
-`;
-    }
-  }
-
-  /* Chamada ao LLM */
   const completion = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
     temperature: 0.2,
     messages: [
-      {
-        role: "system",
-        content: systemPrompt
-      },
-      {
-        role: "user",
-        content: `
-        CONTEXTO:
-        ${context}
+      { role: "system", content: "Você é um especialista sênior em recrutamento." },
+      { role: "system", content: `CONTEXTO (RAG):\n${context}` },
+      ...history,
+      { role: "user", content: q }
+    ]
+  });
 
-        PERGUNTA:
-        ${question}
-        `
-              }
-            ]
-          });
+  const answer =
+    completion?.choices?.[0]?.message?.content?.trim() ||
+    "Desculpe, não consigo te ajudar";
 
-          return completion.choices[0].message.content;
-        }
+  await saveMessage({ jobId, userId, role: "assistant", content: answer });
+  return answer;
+}
 
-/* review.js */
+
+/* =============================================================================
+   FILE: review.js
+   RESPONSABILIDADE: Geração de parecer de entrevista
+   ============================================================================= */
+
 import OpenAI from "openai";
 import { encoding_for_model } from "@dqbd/tiktoken";
 import dotenv from "dotenv";
 
-//importar os prompts
 import { promptGeral } from "./prompts/geral.js";
 import { promptCultura } from "./prompts/cultura.js";
 import { promptTecnica } from "./prompts/tecnica.js";
@@ -404,59 +401,52 @@ export async function gerarReview({
   job_title,
   candidate_name,
   InterviewTypeSchema
-  }) {
-  
-    const data_prompt = {
-      transcript,
-      job_description,
-      job_responsibilities,
-      interview_roadmap,
-      company_values,
-      notes,
-      job_title,
-      candidate_name,
-      InterviewTypeSchema
-    };
-    
-    let prompt = "";
+}) {
+  const data_prompt = {
+    transcript,
+    job_description,
+    job_responsibilities,
+    interview_roadmap,
+    company_values,
+    notes,
+    job_title,
+    candidate_name,
+    InterviewTypeSchema
+  };
 
-    if (!data_prompt.InterviewTypeSchema || data_prompt.InterviewTypeSchema === "none") {
-      prompt = promptGeral({ data_prompt });
-    } else {
-      
-      switch (data_prompt.InterviewTypeSchema.category) {
+  let prompt = "";
 
-        case "cultura":
-          prompt = promptCultura({ data_prompt });
-          break;
-
-        case "tecnica":
-          prompt = promptTecnica({ data_prompt });
-          break;
-
-        case "gestor_lider":
-          prompt = promptGestorLider({ data_prompt });
-          break;
-
-        default:
-          prompt = promptGeral({ data_prompt });
-
-      }
+  if (!InterviewTypeSchema || InterviewTypeSchema === "none") {
+    prompt = promptGeral({ data_prompt });
+  } else {
+    switch (InterviewTypeSchema.category) {
+      case "cultura":
+        prompt = promptCultura({ data_prompt });
+        break;
+      case "tecnica":
+        prompt = promptTecnica({ data_prompt });
+        break;
+      case "gestor_lider":
+        prompt = promptGestorLider({ data_prompt });
+        break;
+      default:
+        prompt = promptGeral({ data_prompt });
     }
+  }
 
-    const enc = encoding_for_model("gpt-4-1106-preview");
-    const tokens = enc.encode(prompt);
-    console.log("Total de tokens:", tokens.length);
+  const enc = encoding_for_model("gpt-4-1106-preview");
+  console.log("Total de tokens:", enc.encode(prompt).length);
 
-    const resposta = await openai.chat.completions.create({
-      model: "gpt-4-1106-preview",
-      messages: [
-        { role: "system", content: "Você é um recrutador técnico especialista." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 3000
-    });
+  const resposta = await openai.chat.completions.create({
+    model: "gpt-4-1106-preview",
+    messages: [
+      { role: "system", content: "Você é um recrutador técnico especialista." },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.7,
+    max_tokens: 3000
+  });
 
-    return resposta.choices[0]?.message?.content?.trim() || "Não foi possível gerar o parecer.";
+  return resposta.choices[0]?.message?.content?.trim()
+    || "Não foi possível gerar o parecer.";
 }

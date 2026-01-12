@@ -47,7 +47,7 @@ async function saveMessage({ jobId, userId, role, content }) {
   );
 }
 
-export async function handleJobChat({ jobId, userId, question }) {
+export async function handleJobChat({ jobId, tenantId, userId, question }) {
   const q = (question || "").trim();
   if (!q) return "Desculpe, não consigo te ajudar";
 
@@ -62,20 +62,19 @@ export async function handleJobChat({ jobId, userId, question }) {
 
   const docsResult = await pool.query(
     `
-    SELECT
-      cd.candidate_id,
-      cd.category,
-      cd.content,
-      cd.embedding,
-      c.name
-    FROM public.candidate_documents cd
-    INNER JOIN public.candidates c
-      ON c.id = cd.candidate_id
-    WHERE
-      cd.job_id = $1
-      AND c.user_id = $2
-    `,
-    [jobId, userId]
+      SELECT
+        cd.candidate_id,
+        cd.category,
+        cd.content,
+        cd.embedding,
+        c.name AS candidate_name
+      FROM public.candidate_documents cd
+      JOIN public.candidates c
+        ON c.id = cd.candidate_id
+      WHERE cd.job_id = $1
+        AND cd.tenant_id = $2
+      `,
+      [jobId, tenantId]
   );
 
   // Salva a pergunta mesmo se não houver docs (pra manter histórico coerente)
