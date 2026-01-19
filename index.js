@@ -381,26 +381,38 @@ app.get("/jobs", async (req, res) => {
 // BUSCAR VAGA
 app.get("/jobs/:id", async (req, res) => {
   const { id } = req.params;
-  const { user_id } = req.query;
 
   try {
-    const tenantId = await getTenantIdByUserId(user_id);
-
-    const result = await pool.query(
-      `
-      SELECT *
-      FROM public.jobs
-      WHERE id = $1
-        AND tenant_id = $2
-      `,
-      [Number(id), tenantId]
+    // 1️⃣ Buscar vaga
+    const jobResult = await pool.query(
+      `SELECT * FROM public.jobs WHERE id = $1`,
+      [id]
     );
 
-    if (!result.rowCount) {
+    if (!jobResult.rowCount) {
       return res.status(404).json({ error: "Vaga não encontrada" });
     }
 
-    res.json({ job: result.rows[0] });
+    const job = jobResult.rows[0];
+
+    // 2️⃣ Buscar tipos de entrevista vinculados
+    const typesResult = await pool.query(
+      `
+      SELECT it.id, it.name, it.category
+      FROM public.job_interview_types jit
+      JOIN public.interview_types it
+        ON it.id = jit.interview_type_id
+      WHERE jit.job_id = $1
+      ORDER BY it.name ASC
+      `,
+      [id]
+    );
+
+    res.json({
+      job,
+      interview_types: typesResult.rows
+    });
+
   } catch (err) {
     console.error("Erro ao buscar vaga:", err);
     res.status(500).json({ error: "Erro ao buscar vaga" });
@@ -445,14 +457,30 @@ app.get("/jobs/:id/interviews", async (req, res) => {
   }
 });
 
-// CRIAR VAGA
+// CRIAR VAGA 
 app.post("/jobs", async (req, res) => {
-  const { user_id, name, job_description, job_responsibilities } = req.body;
+  const {
+    user_id,
+    name,
+    job_description,
+    job_responsibilities,
+    interview_type_ids = [],
+    new_interview_type = null
+  } = req.body;
+
+  if (!user_id || !name) {
+    return res.status(400).json({ error: "user_id e name são obrigatórios" });
+  }
+
+  const client = await pool.connect();
 
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
-    const result = await pool.query(
+    await client.query("BEGIN");
+
+    // 1) Criar vaga
+    const jobResult = await client.query(
       `
       INSERT INTO public.jobs (
         tenant_id,
@@ -473,21 +501,139 @@ app.post("/jobs", async (req, res) => {
       ]
     );
 
-    res.json({ job: result.rows[0] });
+    const job = jobResult.rows[0];
+
+    // Copia defensiva dos ids recebidos
+    const finalInterviewTypeIds = Array.isArray(interview_type_ids)
+      ? [...interview_type_ids]
+      : [];
+
+    let createdInterviewType = null;
+
+    // 2) Se veio "new_interview_type", criar tipo + competências
+    if (new_interview_type) {
+      const { name: typeName, category: typeCategory, competencies } = new_interview_type;
+
+      if (!typeName || !typeCategory) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: "new_interview_type precisa de name e category"
+        });
+      }
+
+      // 2.1) Criar tipo
+      const typeResult = await client.query(
+        `
+        INSERT INTO public.interview_types (
+          tenant_id,
+          user_id,
+          name,
+          category
+        )
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        `,
+        [tenantId, Number(user_id), typeName, typeCategory]
+      );
+
+      createdInterviewType = typeResult.rows[0];
+
+      // 2.2) Criar competências do tipo (se houver)
+      if (Array.isArray(competencies) && competencies.length) {
+        for (const comp of competencies) {
+          await client.query(
+            `
+            INSERT INTO public.competencies (
+              interview_type_id,
+              name,
+              description,
+              insuficiente,
+              abaixo_do_esperado,
+              dentro_expectativas,
+              excepcional
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            `,
+            [
+              createdInterviewType.id,
+              comp?.name || "",
+              comp?.description || "",
+              comp?.insuficiente || "",
+              comp?.abaixo_do_esperado || "",
+              comp?.dentro_expectativas || "",
+              comp?.excepcional || ""
+            ]
+          );
+        }
+      }
+
+      // 2.3) Garantir vínculo do tipo recém-criado
+      finalInterviewTypeIds.push(createdInterviewType.id);
+    }
+
+    // 3) Validar que todos os interview_type_ids pertencem ao tenant
+    const uniqueTypeIds = [...new Set(finalInterviewTypeIds.map(Number).filter(Boolean))];
+
+    if (uniqueTypeIds.length) {
+      const checkTypes = await client.query(
+        `
+        SELECT id
+        FROM public.interview_types
+        WHERE tenant_id = $1
+          AND id = ANY($2::int[])
+        `,
+        [tenantId, uniqueTypeIds]
+      );
+
+      if (checkTypes.rowCount !== uniqueTypeIds.length) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          error: "Um ou mais tipos de entrevista são inválidos ou fora do seu tenant"
+        });
+      }
+
+      // 4) Criar vínculos vaga ↔ tipos
+      for (const typeId of uniqueTypeIds) {
+        await client.query(
+          `
+          INSERT INTO public.job_interview_types (job_id, interview_type_id)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+          `,
+          [job.id, typeId]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      job,
+      created_interview_type: createdInterviewType
+    });
+
   } catch (err) {
-    console.error("Erro ao criar vaga:", err);
-    res.status(500).json({ error: "Erro ao criar vaga" });
+    await client.query("ROLLBACK");
+    console.error("Erro ao criar vaga (com tipos):", err);
+    return res.status(500).json({ error: "Erro ao criar vaga" });
+  } finally {
+    client.release();
   }
 });
+
 
 // ATUALIZAR VAGA
 app.patch("/jobs/:id", async (req, res) => {
   const { id } = req.params;
-  const { user_id, name, job_description, job_responsibilities } = req.body;
+  const {
+    name,
+    job_description,
+    job_responsibilities,
+    interview_type_ids = []
+  } = req.body;
 
   try {
-    const tenantId = await getTenantIdByUserId(user_id);
-
+    // 1️⃣ Atualizar dados da vaga
     const result = await pool.query(
       `
       UPDATE public.jobs
@@ -497,28 +643,41 @@ app.patch("/jobs/:id", async (req, res) => {
         job_responsibilities = $3,
         updated_at = NOW()
       WHERE id = $4
-        AND tenant_id = $5
       RETURNING *
       `,
-      [
-        name,
-        job_description,
-        job_responsibilities,
-        Number(id),
-        tenantId
-      ]
+      [name, job_description, job_responsibilities, id]
     );
 
     if (!result.rowCount) {
       return res.status(404).json({ error: "Vaga não encontrada" });
     }
 
+    // 2️⃣ Remover vínculos antigos
+    await pool.query(
+      `DELETE FROM public.job_interview_types WHERE job_id = $1`,
+      [id]
+    );
+
+    // 3️⃣ Criar novos vínculos
+    for (const typeId of interview_type_ids) {
+      await pool.query(
+        `
+        INSERT INTO public.job_interview_types (job_id, interview_type_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        `,
+        [id, typeId]
+      );
+    }
+
     res.json({ job: result.rows[0] });
+
   } catch (err) {
     console.error("Erro ao atualizar vaga:", err);
     res.status(500).json({ error: "Erro ao atualizar vaga" });
   }
 });
+
 
 // DELETAR VAGA
 app.delete("/jobs/:id", async (req, res) => {
@@ -1485,6 +1644,302 @@ app.delete("/competencies/:id", async (req, res) => {
   } catch (err) {
     console.error("Erro ao deletar competência:", err);
     res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+// SUGERE COMPETÊNCIAS
+app.post("/interview_types/:id/suggest_competencies", async (req, res) => {
+  const interviewTypeId = Number(req.params.id);
+  const {
+    user_id,
+    job_id,
+    job_context,
+    interview_type_name,
+    category
+  } = req.body;
+
+  // -------------------------------------------------------------------------
+  // Validações básicas
+  // -------------------------------------------------------------------------
+  if (!user_id) {
+    return res.status(400).json({
+      error: "user_id é obrigatório"
+    });
+  }
+
+  if (!job_id && !job_context) {
+    return res.status(400).json({
+      error: "Informe job_id OU job_context"
+    });
+  }
+
+  try {
+    // -----------------------------------------------------------------------
+    // 1️⃣ Resolver TIPO DE ENTREVISTA
+    // -----------------------------------------------------------------------
+    let interviewType;
+
+    // 🔹 MODO INLINE (tipo ainda não existe)
+    if (interviewTypeId === 0 && job_context) {
+      if (!interview_type_name || !category) {
+        return res.status(400).json({
+          error: "interview_type_name e category são obrigatórios no modo inline"
+        });
+      }
+
+      interviewType = {
+        name: interview_type_name,
+        category
+      };
+
+    // 🔹 MODO NORMAL (tipo já existe)
+    } else {
+      if (!interviewTypeId) {
+        return res.status(400).json({
+          error: "interview_type_id inválido"
+        });
+      }
+
+      const typeResult = await pool.query(
+        `
+        SELECT id, name, category
+        FROM public.interview_types
+        WHERE id = $1 AND user_id = $2
+        `,
+        [interviewTypeId, user_id]
+      );
+
+      if (!typeResult.rowCount) {
+        return res.status(404).json({
+          error: "Tipo de entrevista não encontrado"
+        });
+      }
+
+      interviewType = typeResult.rows[0];
+    }
+
+    // -----------------------------------------------------------------------
+    // 2️⃣ Resolver CONTEXTO DA VAGA
+    // -----------------------------------------------------------------------
+    let job;
+
+    // 🔹 MODO NORMAL — vaga existente
+    if (job_id) {
+      const jobResult = await pool.query(
+        `
+        SELECT id, name, job_description, job_responsibilities
+        FROM public.jobs
+        WHERE id = $1 AND user_id = $2
+        `,
+        [job_id, user_id]
+      );
+
+      if (!jobResult.rowCount) {
+        return res.status(404).json({
+          error: "Vaga não encontrada"
+        });
+      }
+
+      job = jobResult.rows[0];
+
+      // ---------------------------------------------------------------------
+      // Validar vínculo vaga ↔ tipo (somente se tipo existir)
+      // ---------------------------------------------------------------------
+      if (interviewTypeId !== 0) {
+        const linkResult = await pool.query(
+          `
+          SELECT 1
+          FROM public.job_interview_types
+          WHERE job_id = $1 AND interview_type_id = $2
+          `,
+          [job_id, interviewTypeId]
+        );
+
+        if (!linkResult.rowCount) {
+          return res.status(400).json({
+            error: "Esta vaga não está vinculada a este tipo de entrevista"
+          });
+        }
+      }
+
+    // 🔹 MODO INLINE — vaga em criação
+    } else {
+      if (!job_context?.name) {
+        return res.status(400).json({
+          error: "job_context.name é obrigatório"
+        });
+      }
+
+      job = {
+        name: job_context.name,
+        job_description: job_context.job_description || "Não informado",
+        job_responsibilities: job_context.job_responsibilities || "Não informado"
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 3️⃣ Prompt da IA (único, reutilizado)
+    // -----------------------------------------------------------------------
+    const prompt = `
+Você é um especialista sênior em recrutamento e seleção.
+
+Seu objetivo é sugerir competências que devem ser avaliadas em uma entrevista,
+com base na vaga e no tipo de entrevista.
+
+CONTEXTO DA VAGA:
+Nome da vaga: ${job.name}
+Descrição da vaga: ${job.job_description}
+Responsabilidades: ${job.job_responsibilities}
+
+TIPO DE ENTREVISTA:
+Categoria: ${interviewType.category}
+
+INSTRUÇÕES:
+- Sugira de 4 a 6 competências.
+- Os nomes devem ser curtos e claros.
+- As competências devem ser coerentes com a categoria da entrevista.
+- NÃO descreva níveis de avaliação.
+- NÃO gere textos longos.
+- NÃO use markdown.
+- Responda EXCLUSIVAMENTE em JSON válido.
+
+FORMATO DE SAÍDA:
+{
+  "competencies": [
+    {
+      "name": "Nome da competência",
+      "reason": "Justificativa objetiva (1 ou 2 frases)"
+    }
+  ]
+}
+`;
+
+    // -----------------------------------------------------------------------
+    // 4️⃣ Chamada OpenAI
+    // -----------------------------------------------------------------------
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.6,
+      messages: [
+        {
+          role: "system",
+          content: "Você sugere competências profissionais (culturais, comportamentais e técnicas) para entrevistas de processo seletivo."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    });
+
+    const raw = completion.choices[0].message.content;
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      console.error("Resposta inválida da IA:", raw);
+      return res.status(500).json({
+        error: "Falha ao interpretar resposta da IA"
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // 5️⃣ Resposta final
+    // -----------------------------------------------------------------------
+    return res.json({
+      ok: true,
+      competencies: parsed.competencies || []
+    });
+
+  } catch (err) {
+    console.error("Erro ao sugerir competências:", err);
+    return res.status(500).json({
+      error: "Erro interno ao sugerir competências"
+    });
+  }
+});
+
+// GERAR TEXTOS DA COMPETÊNCIA
+app.post("/interview_types/competencies/generate_texts", async (req, res) => {
+  const {
+    user_id,
+    interview_type_name,
+    category,
+    competency_name
+  } = req.body;
+
+  if (!user_id || !interview_type_name || !category || !competency_name) {
+    return res.status(400).json({
+      error: "Parâmetros obrigatórios: user_id, interview_type_name, category, competency_name"
+    });
+  }
+
+  try {
+    const prompt = `
+Você é um especialista sênior em recrutamento e seleção.
+
+Seu objetivo é gerar textos claros, objetivos e profissionais para avaliação de uma competência em um processo seletivo.
+
+CONTEXTO:
+- Se trata de uma entrevista de : ${interview_type_name}
+- Tema principal da Avaliação: ${category}
+- Nome da competência a ser definida: ${competency_name}
+
+INSTRUÇÕES IMPORTANTES:
+- Responda EXCLUSIVAMENTE em JSON válido.
+- Não utilize markdown.
+- Não inclua comentários, explicações ou texto fora do JSON.
+- O conteúdo deve ser em português (pt-BR).
+- Seja direto, profissional e aplicável a entrevistas reais.
+- Os comportamentos devem ser observáveis em entrevista.
+
+FORMATO DE SAÍDA OBRIGATÓRIO:
+{
+  "description": "texto",
+  "insuficiente": "texto",
+  "abaixo_do_esperado": "texto",
+  "dentro_expectativas": "texto",
+  "excepcional": "texto"
+}
+
+REGRAS DE CONTEÚDO:
+- description: explique o que é a competência e por que ela é importante investigar.
+- insuficiente: comportamentos claramente inadequados ou ausentes.
+- abaixo_do_esperado: comportamentos limitados ou inconsistentes.
+- dentro_expectativas: comportamentos adequados e consistentes.
+- excepcional: comportamentos acima da média, com impacto claro.
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: "Você gera textos estruturados para avaliação de competências." },
+        { role: "user", content: prompt }
+      ]
+    });
+
+    const raw = completion.choices[0].message.content;
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      console.error("Resposta inválida da IA:", raw);
+      return res.status(500).json({
+        error: "Falha ao interpretar resposta da IA"
+      });
+    }
+
+    return res.json({ ok: true, texts: parsed });
+
+  } catch (err) {
+    console.error("Erro ao gerar textos da competência:", err);
+    return res.status(500).json({
+      error: "Erro interno ao gerar textos da competência"
+    });
   }
 });
 

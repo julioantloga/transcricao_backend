@@ -14,7 +14,6 @@ const openai = new OpenAI({
 const HISTORY_LIMIT = 4;
 const TOP_K = 20;
 
-
 async function getLastMessages({ jobId, userId }) {
   const result = await pool.query(
     `
