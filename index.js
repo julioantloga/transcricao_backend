@@ -621,7 +621,6 @@ app.post("/jobs", async (req, res) => {
   }
 });
 
-
 // ATUALIZAR VAGA
 app.patch("/jobs/:id", async (req, res) => {
   const { id } = req.params;
@@ -677,7 +676,6 @@ app.patch("/jobs/:id", async (req, res) => {
     res.status(500).json({ error: "Erro ao atualizar vaga" });
   }
 });
-
 
 // DELETAR VAGA
 app.delete("/jobs/:id", async (req, res) => {
@@ -1504,33 +1502,47 @@ app.get("/jobs/:id/interview_types", async (req, res) => {
   }
 });
 
-// ATUALIZA TIPOS DE ENTREVISTA
+// ATUALIZA TIPO DE ENTREVISTA
 app.patch("/interview_types/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, category, interview_script_id } = req.body;
+  const { user_id, name, category, interview_script_id } = req.body;
+
+  if (!user_id || !id) {
+    return res.status(400).json({ error: "user_id e id são obrigatórios" });
+  }
 
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
     const result = await pool.query(
       `
-      UPDATE interview_types
+      UPDATE public.interview_types
       SET
         name = $1,
         category = $2,
-        interview_script_id = $3
+        interview_script_id = $3,
+        updated_at = NOW()
       WHERE id = $4
         AND tenant_id = $5
       RETURNING *
       `,
-      [name, category, interview_script_id || null, id, tenantId]
+      [
+        name,
+        category,
+        interview_script_id || null,
+        Number(id),
+        tenantId
+      ]
     );
 
-    if (!result.rowCount) {
-      return res.status(404).json({ error: "Tipo de entrevista não encontrado" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        error: "Tipo de entrevista não encontrado ou sem permissão"
+      });
     }
 
     res.json({ type: result.rows[0] });
+
   } catch (err) {
     console.error("Erro ao atualizar tipo de entrevista:", err);
     res.status(500).json({ error: "Erro ao atualizar tipo de entrevista" });
