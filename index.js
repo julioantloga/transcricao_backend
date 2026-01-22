@@ -1130,29 +1130,79 @@ app.get("/interviews/:id", async (req, res) => {
   const { id } = req.params;
   const { user_id } = req.query;
 
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id é obrigatório" });
+  }
+
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
     const result = await pool.query(
       `
-      SELECT *
-      FROM public.interview_reviews
-      WHERE id = $1
-        AND tenant_id = $2
+      SELECT
+        ir.id,
+        ir.transcript,
+        ir.metrics,
+        ir.manual_review,
+        ir.final_review,
+        ir.review_feedback,
+        ir.audio_path,
+
+        ir.candidate_id,
+        ir.job_id,
+        ir.interview_type_id,
+
+        -- recruiter_notes é a fonte de company_values e notes
+        ir.recruiter_notes AS recruiter_notes,
+        ir.recruiter_notes AS company_values,
+
+        c.name AS candidate_name,
+
+        j.name AS job_title,
+        j.job_description,
+        j.job_responsibilities,
+
+        -- Fallback inteligente do roteiro
+        COALESCE(
+          NULLIF(ir.interview_roadmap, ''),
+          s.interview_script
+        ) AS interview_roadmap
+
+      FROM public.interview_reviews ir
+
+      LEFT JOIN public.candidates c
+        ON c.id = ir.candidate_id
+       AND c.tenant_id = ir.tenant_id
+
+      LEFT JOIN public.jobs j
+        ON j.id = ir.job_id
+       AND j.tenant_id = ir.tenant_id
+
+      LEFT JOIN public.interview_types it
+        ON it.id = ir.interview_type_id
+       AND it.tenant_id = ir.tenant_id
+
+      LEFT JOIN public.interview_scripts s
+        ON s.id = it.interview_script_id
+       AND s.tenant_id = ir.tenant_id
+
+      WHERE ir.id = $1
+        AND ir.tenant_id = $2
       `,
-      [Number(id), tenantId]
+      [id, tenantId] // id é UUID → NÃO usar Number()
     );
 
     if (!result.rowCount) {
       return res.status(404).json({ error: "Entrevista não encontrada" });
     }
 
-    res.json({ interview: result.rows[0] });
+    return res.json({ interview: result.rows[0] });
   } catch (err) {
     console.error("Erro ao buscar entrevista:", err);
-    res.status(500).json({ error: "Erro ao buscar entrevista" });
+    return res.status(500).json({ error: "Erro ao buscar entrevista" });
   }
 });
+
 
 // SALVA AUDIO DA ENTREVISTA
 app.patch("/interviews/:id/audio_path", async (req, res) => {
@@ -1301,29 +1351,19 @@ app.patch("/interviews/:id/review_feedback", async (req, res) => {
 
 // ADICIONA TIPO DE ENTREVISTA
 app.post("/interview_types", async (req, res) => {
-  const { user_id, name, category } = req.body;
+  const { user_id, name, category, interview_script_id } = req.body;
 
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
     const result = await pool.query(
-      `
-      INSERT INTO public.interview_types (
-        tenant_id,
-        user_id,
-        name,
-        category
-      )
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-      `,
-      [
-        tenantId,
-        Number(user_id),
-        name,
-        category
-      ]
-    );
+        `
+        INSERT INTO interview_types (name, category, tenant_id, interview_script_id)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        `,
+        [name, category, tenantId, interview_script_id || null]
+      );
 
     res.json({ type: result.rows[0] });
   } catch (err) {
@@ -1341,10 +1381,14 @@ app.get("/interview_types", async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT *
-      FROM public.interview_types
+      SELECT
+        id,
+        name,
+        category,
+        interview_script_id
+      FROM interview_types
       WHERE tenant_id = $1
-      ORDER BY id DESC
+      ORDER BY name
       `,
       [tenantId]
     );
@@ -1400,31 +1444,70 @@ app.get("/interview_types/:id", async (req, res) => {
   }
 });
 
-// ATUALIZA TIPOS DE ENTREVISTA
-app.patch("/interview_types/:id", async (req, res) => {
-  const { id } = req.params;
-  const { user_id, name, category } = req.body;
+// LISTAR TIPOS DE ENTREVISTA DE UMA VAGA
+app.get("/jobs/:id/interview_types", async (req, res) => {
+  const { id: jobId } = req.params;
+  const { user_id } = req.query;
+
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id é obrigatório" });
+  }
+
+  if (!jobId || Number.isNaN(Number(jobId))) {
+    return res.status(400).json({ error: "job_id inválido" });
+  }
 
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
     const result = await pool.query(
       `
-      UPDATE public.interview_types
+      SELECT
+        it.id,
+        it.name,
+        it.category,
+        it.interview_script_id,
+        s.interview_script
+      FROM public.job_interview_types jit
+      INNER JOIN public.interview_types it
+        ON it.id = jit.interview_type_id
+      LEFT JOIN public.interview_scripts s
+        ON s.id = it.interview_script_id
+       AND s.tenant_id = it.tenant_id
+      WHERE jit.job_id = $1
+        AND it.tenant_id = $2
+      ORDER BY it.name ASC
+      `,
+      [Number(jobId), tenantId]
+    );
+
+    return res.json({ types: result.rows });
+  } catch (err) {
+    console.error("Erro ao listar tipos da vaga:", err);
+    return res.status(500).json({ error: "Erro ao listar tipos da vaga" });
+  }
+});
+
+// ATUALIZA TIPOS DE ENTREVISTA
+app.patch("/interview_types/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, category, interview_script_id } = req.body;
+
+  try {
+    const tenantId = await getTenantIdByUserId(user_id);
+
+    const result = await pool.query(
+      `
+      UPDATE interview_types
       SET
         name = $1,
         category = $2,
-        updated_at = NOW()
-      WHERE id = $3
-        AND tenant_id = $4
+        interview_script_id = $3
+      WHERE id = $4
+        AND tenant_id = $5
       RETURNING *
       `,
-      [
-        name,
-        category,
-        Number(id),
-        tenantId
-      ]
+      [name, category, interview_script_id || null, id, tenantId]
     );
 
     if (!result.rowCount) {
