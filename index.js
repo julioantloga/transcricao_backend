@@ -1353,17 +1353,33 @@ app.patch("/interviews/:id/review_feedback", async (req, res) => {
 app.post("/interview_types", async (req, res) => {
   const { user_id, name, category, interview_script_id } = req.body;
 
+  if (!user_id || !name || !category) {
+    return res.status(400).json({ error: "Parâmetros obrigatórios ausentes" });
+  }
+
   try {
     const tenantId = await getTenantIdByUserId(user_id);
 
     const result = await pool.query(
-        `
-        INSERT INTO interview_types (name, category, tenant_id, interview_script_id)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
-        `,
-        [name, category, tenantId, interview_script_id || null]
-      );
+      `
+      INSERT INTO public.interview_types (
+        user_id,
+        name,
+        category,
+        tenant_id,
+        interview_script_id
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+      `,
+      [
+        Number(user_id),
+        name,
+        category,
+        tenantId,
+        interview_script_id || null
+      ]
+    );
 
     res.json({ type: result.rows[0] });
   } catch (err) {
