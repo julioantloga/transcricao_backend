@@ -49,9 +49,13 @@ PRINCÍPIOS DE ANÁLISE:
 - Nunca invente informações.
 - Diferencie fatos relatados de interpretações profissionais.
 - Evite inferências psicológicas profundas.
-- Utilize *PROVAS CONCRETAS* para descreever as *evidências* descritas pelo candidato, como dados de metas batidas, conquistas em números, etc.
+- Utilize *PROVAS CONCRETAS* para descreever as *evidências* descritas pelo candidato.
 - Considere coerência entre trajetória, discurso e resultados.
 - Ausência de evidência NÃO é evidência negativa → use "Sem dados suficientes".
+
+IMPORTANTE:
+Exiba dados da transcrição para complementar as provas concretas e evidências.
+Exemplos: "aumentou 50%, "atingimos 100 contratações". "Participei de 2 projetos que fracassaram", "Isso nos custou 200 mil".
 
 -------------------------------------
 
@@ -191,5 +195,3 @@ REGRAS FINAIS:
 
 return prompt;
 }
-
-

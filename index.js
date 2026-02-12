@@ -1902,9 +1902,6 @@ Nome da vaga: ${job.name}
 Descrição da vaga: ${job.job_description}
 Responsabilidades: ${job.job_responsibilities}
 
-TIPO DE ENTREVISTA:
-Categoria: ${interviewType.category}
-
 INSTRUÇÕES:
 - Sugira de 4 a 6 competências.
 - Os nomes devem ser curtos e claros.
@@ -1975,58 +1972,144 @@ FORMATO DE SAÍDA:
 app.post("/interview_types/competencies/generate_texts", async (req, res) => {
   const {
     user_id,
+    competency_name,
     interview_type_name,
-    category,
-    competency_name
+    job_context = {}
   } = req.body;
 
-  if (!user_id || !interview_type_name || !category || !competency_name) {
+  if (!user_id || !interview_type_name || !competency_name) {
     return res.status(400).json({
       error: "Parâmetros obrigatórios: user_id, interview_type_name, category, competency_name"
     });
   }
 
+  const {
+    name: job_name = "",
+    job_description = "",
+    job_responsibilities = ""
+  } = job_context;
+
   try {
+
     const prompt = `
-Você é um especialista sênior em recrutamento e seleção.
+      PAPEL:
+      Você é um especialista sênior em recrutamento e seleção com ampla experiência em entrevistas estruturadas e avaliação por competências.
 
-Seu objetivo é gerar textos claros, objetivos e profissionais para avaliação de uma competência em um processo seletivo.
+      OBJETIVO:
+      Gerar uma régua de avaliação técnica ou comportamental altamente estruturada, específica para a vaga informada e adequada para classificação futura baseada na transcrição da entrevista.
 
-CONTEXTO:
-- Se trata de uma entrevista de : ${interview_type_name}
-- Tema principal da Avaliação: ${category}
-- Nome da competência a ser definida: ${competency_name}
+      IMPORTANTE:
+      Essa régua será utilizada posteriormente por outro sistema (humano ou IA) para classificar o nível do candidato com base exclusivamente nas evidências presentes na transcrição da entrevista.
 
-INSTRUÇÕES IMPORTANTES:
-- Responda EXCLUSIVAMENTE em JSON válido.
-- Não utilize markdown.
-- Não inclua comentários, explicações ou texto fora do JSON.
-- O conteúdo deve ser em português (pt-BR).
-- Seja direto, profissional e aplicável a entrevistas reais.
-- Os comportamentos devem ser observáveis em entrevista.
+      FORMATO DE SAÍDA (OBRIGATÓRIO):
+      Responda EXCLUSIVAMENTE em JSON válido:
 
-FORMATO DE SAÍDA OBRIGATÓRIO:
-{
-  "description": "texto",
-  "insuficiente": "texto",
-  "abaixo_do_esperado": "texto",
-  "dentro_expectativas": "texto",
-  "excepcional": "texto"
-}
+      {
+        "description": "texto",
+        "insuficiente": "texto",
+        "abaixo_do_esperado": "texto",
+        "dentro_expectativas": "texto",
+        "excepcional": "texto"
+      }
 
-REGRAS DE CONTEÚDO:
-- description: explique o que é a competência e por que ela é importante investigar.
-- insuficiente: comportamentos claramente inadequados ou ausentes.
-- abaixo_do_esperado: comportamentos limitados ou inconsistentes.
-- dentro_expectativas: comportamentos adequados e consistentes.
-- excepcional: comportamentos acima da média, com impacto claro.
-`;
+      REGRAS TÉCNICAS:
+
+      - Não utilize markdown.
+      - Não inclua comentários ou qualquer texto fora do JSON.
+      - Use português do Brasil.
+      - Cada campo deve ter entre 2 e 4 frases curtas e objetivas.
+      - Utilize o contexto da vaga para tornar a régua específica.
+      - Caso o contexto seja insuficiente, utilize apenas o nome da competência sem inventar cenários inexistentes.
+      - A diferenciação entre níveis deve ser progressiva e clara.
+
+      CONTEXTO DA VAGA:
+
+      NOME DA VAGA:
+      """
+      ${job_name || interview_type_name}
+      """
+
+      DESCRIÇÃO DA VAGA:
+      """
+      ${job_description || "Não informado"}
+      """
+
+      RESPONSABILIDADES:
+      """
+      ${job_responsibilities || "Não informado"}
+      """
+
+      COMPETÊNCIA A SER AVALIADA:
+      """
+      ${competency_name}
+      """
+
+      PRINCÍPIO DE CONSTRUÇÃO DA RÉGUA:
+
+      A progressão entre os níveis deve considerar obrigatoriamente:
+
+      1. Presença ou ausência de exemplos concretos.
+      2. Profundidade e estrutura do relato.
+      3. Grau de autonomia demonstrado.
+      4. Complexidade do contexto descrito.
+      5. Impacto e resultado evidenciado.
+      6. Consistência das evidências ao longo da entrevista.
+
+      Cada nível deve evoluir de forma clara nesses critérios.
+
+      REGRAS DE CONTEÚDO:
+
+      description:
+      - Defina a competência aplicada especificamente a esta vaga.
+      - Relacione diretamente com responsabilidades e entregas esperadas.
+      - Explique o impacto prático dessa competência no desempenho do cargo.
+
+      insuficiente:
+      - Ausência de exemplos concretos na entrevista.
+      - Respostas genéricas, teóricas ou desconectadas da prática.
+      - Incapacidade de explicar aplicação real da competência.
+      - Nenhuma evidência de impacto ou resultado.
+      - Dependência excessiva de terceiros nas situações descritas.
+
+      abaixo_do_esperado:
+      - Exemplos superficiais ou pouco estruturados.
+      - Aplicação restrita a contextos simples ou pouco relevantes.
+      - Baixa clareza sobre resultados alcançados.
+      - Demonstra autonomia limitada.
+      - Impacto pouco significativo ou mal explicado.
+
+      dentro_expectativas:
+      - Exemplos concretos e contextualizados.
+      - Aplicação consistente da competência nas responsabilidades descritas.
+      - Demonstra autonomia adequada ao nível da vaga.
+      - Conecta ações a resultados objetivos.
+      - Evidências compatíveis com as exigências do cargo.
+
+      excepcional:
+      - Múltiplos exemplos estruturados e bem contextualizados.
+      - Alto grau de autonomia e protagonismo.
+      - Demonstra aplicação em contextos complexos ou estratégicos.
+      - Evidencia impacto mensurável, melhoria de resultados ou geração de valor.
+      - Vai além das responsabilidades esperadas para o cargo.
+
+      IMPORTANTE:
+
+      - Descreva comportamentos observáveis em entrevista.
+      - Evite julgamentos psicológicos ou subjetivos.
+      - Não repita textos entre os níveis.
+      - Diferencie claramente cada nível da escala.
+      - A régua deve permitir classificação objetiva baseada apenas na transcrição.
+      `;
+
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.7,
       messages: [
-        { role: "system", content: "Você gera textos estruturados para avaliação de competências." },
+        {
+          role: "system",
+          content: "Você gera textos estruturados e objetivos para avaliação de competências com base no contexto de uma vaga."
+        },
         { role: "user", content: prompt }
       ]
     });

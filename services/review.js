@@ -4,10 +4,8 @@ import { encoding_for_model } from "@dqbd/tiktoken";
 import dotenv from "dotenv";
 
 //importar os prompts
-import { promptGeral } from "./prompts/geral.js";
-import { promptCultura } from "./prompts/cultura.js";
-import { promptTecnica } from "./prompts/tecnica.js";
-import { promptGestorLider } from "./prompts/gestor_lider.js";
+import { promptCompleto } from "./prompts/completo.js";
+import { promptSimplificado } from "./prompts/simplificado.js";
 
 dotenv.config();
 
@@ -41,41 +39,19 @@ export async function gerarReview({
     
     let prompt = "";
 
-    if (!data_prompt.InterviewTypeSchema || data_prompt.InterviewTypeSchema === "none") {
-      prompt = promptGeral({ data_prompt });
-    } else {
-      
-      switch (data_prompt.InterviewTypeSchema.category) {
+    prompt = promptCompleto ({ data_prompt });
 
-        case "cultura":
-          prompt = promptCultura({ data_prompt });
-          break;
-
-        case "tecnica":
-          prompt = promptTecnica({ data_prompt });
-          break;
-
-        case "gestor_lider":
-          prompt = promptGestorLider({ data_prompt });
-          break;
-
-        default:
-          prompt = promptGeral({ data_prompt });
-
-      }
-    }
-
-    const enc = encoding_for_model("gpt-4-1106-preview");
+    const enc = encoding_for_model("gpt-4o-2024-11-20");
     const tokens = enc.encode(prompt);
     console.log("Total de tokens:", tokens.length);
 
     const resposta = await openai.chat.completions.create({
-      model: "gpt-4-1106-preview",
+      model: "gpt-4o-2024-11-20",
       messages: [
         { role: "system", content: "Você é um recrutador técnico especialista." },
         { role: "user", content: prompt }
       ],
-      temperature: 0.7,
+      temperature: 0.3,
       max_tokens: 3000
     });
 

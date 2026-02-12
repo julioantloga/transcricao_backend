@@ -1,5 +1,5 @@
 /* Parecer Completo */
-export function promptCompleto({ data_prompt }) {
+export function promptSimplificado({ data_prompt }) {
 
 const prompt = `
 PAPEL:
@@ -191,5 +191,3 @@ REGRAS FINAIS:
 
 return prompt;
 }
-
-
