@@ -22,8 +22,10 @@ export async function gerarReview({
   company_values,
   job_title,
   candidate_name,
-  InterviewTypeSchema
-  }) {
+  InterviewTypeSchema,
+  review_format = "completo"
+})
+ {
   
     const data_prompt = {
       transcript,
@@ -39,7 +41,12 @@ export async function gerarReview({
     
     let prompt = "";
 
-    prompt = promptCompleto ({ data_prompt });
+    if (review_format === "simplificado") {
+        prompt = promptSimplificado({ data_prompt });
+      } else {
+        prompt = promptCompleto({ data_prompt });
+      }
+
 
     const enc = encoding_for_model("gpt-4o-2024-11-20");
     const tokens = enc.encode(prompt);

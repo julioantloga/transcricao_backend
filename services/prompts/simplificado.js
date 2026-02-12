@@ -49,9 +49,14 @@ PRINCÍPIOS DE ANÁLISE:
 - Nunca invente informações.
 - Diferencie fatos relatados de interpretações profissionais.
 - Evite inferências psicológicas profundas.
-- Utilize *PROVAS CONCRETAS* para descreever as *evidências* descritas pelo candidato, como dados de metas batidas, conquistas em números, etc.
+- Utilize *PROVAS CONCRETAS* para descreever as *evidências* descritas pelo candidato.
 - Considere coerência entre trajetória, discurso e resultados.
 - Ausência de evidência NÃO é evidência negativa → use "Sem dados suficientes".
+
+IMPORTANTE:
+
+Exiba dados/números da transcrição para complementar as provas concretas e evidências.
+Exemplos: "aumentou 50%, "atingimos 100 contratações". "Participei de 2 projetos que fracassaram", "Isso nos custou 200 mil".
 
 -------------------------------------
 
@@ -78,34 +83,13 @@ PRIORIDADE DAS FONTES:
 
 -------------------------------------
 
-AVALIAÇÃO DAS COMPETÊNCIAS (OBRIGATÓRIO):
-
-Para cada competência da régua:
-
-- Classifique APENAS UMA categoria:
-  "insuficiente"
-  "abaixo do esperado"
-  "dentro das expectativas"
-  "excepcional"
-  ou "Sem dados suficientes".
-
-Critérios:
-
-- Use evidências comportamentais concretas da entrevista.
-- Considere profundidade, consistência e aplicabilidade prática.
-- Evite avaliações genéricas ou baseadas apenas em intenção.
-- Caso a régua esteja incompleta ou ambígua, priorize a definição da competência e as evidências da entrevista.
-
--------------------------------------
-
 ANÁLISE OBRIGATÓRIA:
 
 1. Resumo profissional com trajetória e momento de carreira.
-2. Avaliação completa das competências.
-3. Até 4 pontos fortes relevantes para a vaga.
-4. Até 4 pontos de atenção relevantes para decisão.
+2. Avaliação das competências.
+3. LIste os pontos fortes relevantes para a vaga, incluindo competências dentro das expectativas.
+4. Liste os pontos de atenção relevantes para decisão, incluindo competências abaixo do esperado, lacunas ou temas pouco explorados na entrevista.
 5. Expectativas e motivações profissionais: priorize desejos e preferências explícitas, como pretenção salarial e modelo de trabalho desejado.
-6. Insights: Identificação de lacunas ou temas pouco explorados na entrevista.
 
 -------------------------------------
 
@@ -155,29 +139,16 @@ TEMPLATE DE OUTPUT (OBRIGATÓRIO):
 RESUMO:
 [Resumo profissional com trajetória, momento de carreira e aderência geral]
 
-AVALIAÇÃO POR COMPETÊNCIA:
-[Competência 1]:
-[Evidências concreta da entrevista ou "Sem informações suficientes"]
-[Classificação]
----
-[Competência 2]:
-[Evidências concreta da entrevista ou "Sem informações suficientes"]
-[Classificação]
-
 PONTOS FORTES:  
 - item  
 - item  
 
 PONTOS DE ATENÇÃO:  
 - item  
-- item  
+- item 
 
 EXPECTATIVAS:
 [Resumo objetivo sobre suas expectativas e motivações]
-
-INSIGHTS:
-- item  
-- item
 
 -------------------------------------
 

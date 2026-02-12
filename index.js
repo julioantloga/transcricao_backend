@@ -939,7 +939,8 @@ app.post("/review", async (req, res) => {
       job_responsibilities,
       company_values,
       metrics,
-      audio_path
+      audio_path,
+      review_format
     } = req.body;
 
     // ------------------------------------------------------------------
@@ -966,7 +967,8 @@ app.post("/review", async (req, res) => {
       job_responsibilities,
       job_title,
       InterviewTypeSchema,
-      candidate_name
+      candidate_name,
+      review_format
     });
 
     // ------------------------------------------------------------------
@@ -1200,7 +1202,6 @@ app.get("/interviews/:id", async (req, res) => {
     return res.status(500).json({ error: "Erro ao buscar entrevista" });
   }
 });
-
 
 // SALVA AUDIO DA ENTREVISTA
 app.patch("/interviews/:id/audio_path", async (req, res) => {
@@ -2100,7 +2101,6 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
       - Diferencie claramente cada nível da escala.
       - A régua deve permitir classificação objetiva baseada apenas na transcrição.
       `;
-
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
