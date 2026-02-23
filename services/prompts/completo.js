@@ -87,10 +87,10 @@ AVALIAÇÃO DAS COMPETÊNCIAS (OBRIGATÓRIO):
 Para cada competência da régua:
 
 - Classifique APENAS UMA categoria:
-  "insuficiente"
-  "abaixo do esperado"
-  "dentro das expectativas"
-  "excepcional"
+  "insuficiente" ⭐ (1 estrela)
+  "abaixo do esperado" ⭐⭐ (2 estrelas)
+  "dentro das expectativas" ⭐⭐⭐ (3 estrelas)
+  "excepcional" ⭐⭐⭐⭐ (4 estrelas)
   ou "Sem dados suficientes".
 
 Critérios:
@@ -105,7 +105,7 @@ Critérios:
 ANÁLISE OBRIGATÓRIA:
 
 1. Resumo profissional com trajetória e momento de carreira.
-2. Avaliação completa das competências.
+2. Avaliação completa das competências com nome da competência, classificação e justificativa curta e objetiva.
 3. Até 4 pontos fortes relevantes para a vaga.
 4. Até 4 pontos de atenção relevantes para decisão.
 5. Expectativas e motivações profissionais: priorize desejos e preferências explícitas, como pretenção salarial e modelo de trabalho desejado.
@@ -160,13 +160,13 @@ RESUMO:
 [Resumo profissional com trajetória, momento de carreira e aderência geral]
 
 AVALIAÇÃO POR COMPETÊNCIA:
-[Competência 1]:
-[Evidências concreta da entrevista ou "Sem informações suficientes"]
-[Classificação]
+[Competência 1]: [quantidade de estrelas da classificação⭐] ([Classificação]) 
+[Justificativa objetiva e curta com base nas evidencias presentes na entrevista ou "Sem informações suficientes"]
+
 ---
-[Competência 2]:
-[Evidências concreta da entrevista ou "Sem informações suficientes"]
-[Classificação]
+[Competência 2]: [quantidade de estrelas da classificação⭐] ([Classificação]) 
+[Justificativa objetiva e curta com base nas evidencias presentes na entrevista ou "Sem informações suficientes"]
+
 
 PONTOS FORTES:  
 - item  

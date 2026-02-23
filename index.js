@@ -1893,10 +1893,9 @@ app.post("/interview_types/:id/suggest_competencies", async (req, res) => {
     // 3️⃣ Prompt da IA (único, reutilizado)
     // -----------------------------------------------------------------------
     const prompt = `
-Você é um especialista sênior em recrutamento e seleção.
-
-Seu objetivo é sugerir competências que devem ser avaliadas em uma entrevista,
-com base na vaga e no tipo de entrevista.
+A seguir, fornecerei a descrição de um cargo.
+Com base nessa descrição, analise e identifique **apenas** as competências da lista entre << >>.
+Observe **apenas** o objetivo do trabalho, responsabilidades e qualificações.
 
 CONTEXTO DA VAGA:
 Nome da vaga: ${job.name}
@@ -1904,20 +1903,63 @@ Descrição da vaga: ${job.job_description}
 Responsabilidades: ${job.job_responsibilities}
 
 INSTRUÇÕES:
-- Sugira de 4 a 6 competências.
-- Os nomes devem ser curtos e claros.
-- As competências devem ser coerentes com a categoria da entrevista.
-- NÃO descreva níveis de avaliação.
-- NÃO gere textos longos.
-- NÃO use markdown.
-- Responda EXCLUSIVAMENTE em JSON válido.
+- Traga apenas as competências claramente mapeadas. Caso uma competência não estiver claramente mapeada, não faça a associação da competência as tarefas. Em caso de dúvida na associação da competência, não apresente a mesma, retorne apenas as competências das quais tiver **CERTEZA**.
+- Foque apenas nas competências principais para a função em questão.
+- Considere tanto o que está explicitamente mencionado quanto o que pode ser inferido pelas atividades e responsabilidades descritas.
+- Retorne as competências mais relevantes no formato descrito no *FORMATO DE SAÍDA:* abaixo 
+- Se limite em trazer as 5 principais competências, dentre as identificadas.
+- Não apresente títulos, nem mensagens antes ou depois das competências, apenas a lista de competências e sua justificativa.
+
+LISTA DE COMPETÊNCIAS:
+<< 
+Gestão de Recursos de Pessoas;
+Coordenação e Gestão do Tempo;
+Gestão de Recursos financeiros e Materiais;
+Gerenciamento de Projetos;
+Vendas;
+Comunicação e Marketing de Produtos e Serviços;
+Experiência do Cliente; 
+Pensamento Analítico;
+Pensamento Criativo;
+Pensamento Crítico;
+Pensamento Sistêmico;
+Marketing Digital;
+Software e Linguagem de Programação;
+Fazendo Perguntas;
+Ensino e Treinamento;
+Recebendo FeedBack;
+Comunicação;
+Seguindo Instruções e Procedimentos;
+Auxiliar e apoiar os colegas de trabalho;
+Empatia;
+Persuasão e Negociação;
+Relacionamento e Networking;
+Demonstrando Consideração;
+Liderança Ética;
+Construindo Confiança;
+Trabalhar de forma independente;
+Gerenciamento de tempo e priorização;
+Autoconsciência Interna;
+Autoconsciência Externa;
+Automotivação/ Autocontrole;
+Curiosidade;
+Adaptação à Mudança;
+Vontade de Aprender;
+Cumprimento de Compromissos e Prazos;
+Assumindo Responsabilidade;
+Gerenciando a Qualidade;
+Organização;
+Gerenciamento de Frustrações;
+Gerenciamento de Estresse;
+Persistência;
+>>
 
 FORMATO DE SAÍDA:
 {
   "competencies": [
     {
       "name": "Nome da competência",
-      "reason": "Justificativa objetiva (1 ou 2 frases)"
+      "reason": "Justificativa objetiva em 1 frase"
     }
   ]
 }
@@ -1927,12 +1969,12 @@ FORMATO DE SAÍDA:
     // 4️⃣ Chamada OpenAI
     // -----------------------------------------------------------------------
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       temperature: 0.6,
       messages: [
         {
           role: "system",
-          content: "Você sugere competências profissionais (culturais, comportamentais e técnicas) para entrevistas de processo seletivo."
+          content: "Você é um assistente de RH especialista em análise de perfis profissionais. Sua tarefa é ler a descrição de cargos fornecida e identificar, com precisão, quais competências da lista pré-definida são relevantes para esse cargo. Liste apenas as competências aplicáveis e sua justificativa. Caso uma competência não seja claramente relacionada, não a inclua. A resposta deve ser conforme a exemplificada no FORMATO DE SAÍDA"
         },
         {
           role: "user",
@@ -1993,9 +2035,6 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
   try {
 
     const prompt = `
-      PAPEL:
-      Você é um especialista sênior em recrutamento e seleção com ampla experiência em entrevistas estruturadas e avaliação por competências.
-
       OBJETIVO:
       Gerar uma régua de avaliação técnica ou comportamental altamente estruturada, específica para a vaga informada e adequada para classificação futura baseada na transcrição da entrevista.
 
@@ -2017,9 +2056,8 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
 
       - Não utilize markdown.
       - Não inclua comentários ou qualquer texto fora do JSON.
-      - Use português do Brasil.
-      - Cada campo deve ter entre 2 e 4 frases curtas e objetivas.
-      - Utilize o contexto da vaga para tornar a régua específica.
+      - Utilize o contexto da vaga para tornar a régua personalizada para a competência em questão.
+      - Utilize a descrição e as responsabilidades da vaga para personalizar a régua. 
       - Caso o contexto seja insuficiente, utilize apenas o nome da competência sem inventar cenários inexistentes.
       - A diferenciação entre níveis deve ser progressiva e clara.
 
@@ -2066,14 +2104,16 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
       - Explique o impacto prático dessa competência no desempenho do cargo.
 
       insuficiente:
-      - Ausência de exemplos concretos na entrevista.
-      - Respostas genéricas, teóricas ou desconectadas da prática.
-      - Incapacidade de explicar aplicação real da competência.
-      - Nenhuma evidência de impacto ou resultado.
-      - Dependência excessiva de terceiros nas situações descritas.
+      - Defina até 4 comportamentos ou 
+      - Ausência de exemplos concretos relacionados a competência.
+      - Ausência de experiência prévia relacionada à competência.
+      - Respostas genéricas, confusas ou desconectadas da prática.
+      - Nenhuma evidência de impacto ou resultado relacionado à competência.
+      - Falta de autonomia em situações/desafios relacionadas à competência.
 
       abaixo_do_esperado:
       - Exemplos superficiais ou pouco estruturados.
+      - Experiência relacionada à competência abaixo da desejada para a vaga.
       - Aplicação restrita a contextos simples ou pouco relevantes.
       - Baixa clareza sobre resultados alcançados.
       - Demonstra autonomia limitada.
@@ -2081,6 +2121,7 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
 
       dentro_expectativas:
       - Exemplos concretos e contextualizados.
+      - Experiência relacionada à competência atende a desejada para a vaga.
       - Aplicação consistente da competência nas responsabilidades descritas.
       - Demonstra autonomia adequada ao nível da vaga.
       - Conecta ações a resultados objetivos.
@@ -2088,27 +2129,29 @@ app.post("/interview_types/competencies/generate_texts", async (req, res) => {
 
       excepcional:
       - Múltiplos exemplos estruturados e bem contextualizados.
-      - Alto grau de autonomia e protagonismo.
+      - Experiência relacionada à competência atende a desejada para a vaga.
+      - Alto grau de autonomia e protagonismo relacionadas à competência.
       - Demonstra aplicação em contextos complexos ou estratégicos.
       - Evidencia impacto mensurável, melhoria de resultados ou geração de valor.
-      - Vai além das responsabilidades esperadas para o cargo.
+      - Vai além das responsabilidades relacionadas à competência.
 
       IMPORTANTE:
-
-      - Descreva comportamentos observáveis em entrevista.
+      - Descreva de forma clára e objetiva os comportamentos observáveis em entrevista.
+      - Evite usar muito/pouco, mal/bom, alto/baixo.
       - Evite julgamentos psicológicos ou subjetivos.
       - Não repita textos entre os níveis.
       - Diferencie claramente cada nível da escala.
-      - A régua deve permitir classificação objetiva baseada apenas na transcrição.
+      - Para cada nível, forneça até 5 tópicos observáveis.
+      - A régua deve permitir classificação objetiva baseada apenas na transcrição da entrevista.
       `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.7,
+      model: "gpt-4o",
+      temperature: 0.8,
       messages: [
         {
           role: "system",
-          content: "Você gera textos estruturados e objetivos para avaliação de competências com base no contexto de uma vaga."
+          content: "Você é um especialista sênior em recrutamento e seleção com ampla experiência em avaliação de competências."
         },
         { role: "user", content: prompt }
       ]
